@@ -1,13 +1,13 @@
 use axum::Router;
 use axum::http::Request;
 use axum::routing::get;
-use sqlx::PgPool;
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
+use crate::AppState;
 use crate::handlers;
 
-pub fn router(pool: PgPool) -> Router {
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(handlers::index))
         .route("/health", get(handlers::health))
@@ -28,5 +28,5 @@ pub fn router(pool: PgPool) -> Router {
                 );
             }),
         )
-        .with_state(pool)
+        .with_state(state)
 }

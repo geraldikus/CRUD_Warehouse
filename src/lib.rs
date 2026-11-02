@@ -6,14 +6,28 @@
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod expiry;
 pub mod handlers;
 pub mod models;
+pub mod mqtt;
 pub mod routes;
 pub mod validation;
 
 use sqlx::PgPool;
 
-/// Build the HTTP router with a Postgres connection pool.
-pub fn app(pool: PgPool) -> axum::Router {
-    routes::router(pool)
+use crate::mqtt::MqttPublisher;
+
+/// Everything a request handler needs.
+///
+/// Axum stores one state value on the router. The pool and the MQTT client
+/// therefore travel together, instead of as two separate arguments.
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: PgPool,
+    pub mqtt: MqttPublisher,
+}
+
+/// Build the HTTP router with the database pool and the MQTT publisher.
+pub fn app(state: AppState) -> axum::Router {
+    routes::router(state)
 }

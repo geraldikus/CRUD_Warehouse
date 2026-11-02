@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, name, quantity, created_at, updated_at\n        FROM items\n        WHERE id = $1\n        ",
+  "query": "\n        UPDATE items\n        SET name = $1,\n            quantity = $2,\n            expires_at = $3,\n            -- Same date keeps the notices we already sent.\n            -- A new date, or clearing it, starts the ladder over.\n            expiry_notice = CASE\n                WHEN expires_at IS NOT DISTINCT FROM $3 THEN expiry_notice\n                ELSE 'none'\n            END,\n            updated_at = now()\n        WHERE id = $4\n        RETURNING id, name, quantity, created_at, updated_at, expires_at\n        ",
   "describe": {
     "columns": [
       {
@@ -57,10 +57,24 @@
             "name": "updated_at"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "items",
+            "name": "expires_at"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
+        "Int4",
+        "Timestamptz",
         "Uuid"
       ]
     },
@@ -69,8 +83,9 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "8c30cfa3adc5b240565aa30dbdd974d90abebdb633b36033d6e315cb41046fa5"
+  "hash": "dbf5af2c6e9c0edb412658c82cb8cbc2b5ae5b31d0f345ef8cfa0dbe60a0c578"
 }

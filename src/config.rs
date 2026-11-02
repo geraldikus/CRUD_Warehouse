@@ -4,6 +4,8 @@ use std::env;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
+    pub mqtt_host: String,
+    pub mqtt_port: u16,
 }
 
 impl Config {
@@ -20,6 +22,17 @@ impl Config {
         let database_url = env::var("DATABASE_URL")
             .expect("DATABASE_URL is not set. Copy .env.example to .env or export the variable.");
 
-        Self { database_url }
+        // MQTT is optional. Missing values mean the local Mosquitto from docker compose.
+        let mqtt_host = env::var("MQTT_HOST").unwrap_or_else(|_| "localhost".to_string());
+        let mqtt_port = env::var("MQTT_PORT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1883);
+
+        Self {
+            database_url,
+            mqtt_host,
+            mqtt_port,
+        }
     }
 }

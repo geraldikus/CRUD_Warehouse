@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
-use warehouse::app;
+use warehouse::mqtt::MqttPublisher;
+use warehouse::{AppState, app};
 
 /// One lock so two tests never truncate the same table at the same time.
 static DB_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -48,6 +49,14 @@ async fn setup() -> Option<PgPool> {
         .expect("failed to empty the items table");
 
     Some(pool)
+}
+
+/// HTTP tests do not need a broker. `Disabled` drops every publish.
+fn test_app(pool: PgPool) -> axum::Router {
+    app(AppState {
+        pool,
+        mqtt: MqttPublisher::disabled(),
+    })
 }
 
 async fn send(app: &axum::Router, request: Request<Body>) -> (StatusCode, Option<Value>) {
@@ -92,7 +101,7 @@ async fn index_page_is_html() {
         return;
     };
 
-    let response = app(pool)
+    let response = test_app(pool)
         .oneshot(empty_request("GET", "/"))
         .await
         .expect("request failed");
@@ -122,7 +131,7 @@ async fn health_and_crud_cycle() {
     let Some(pool) = setup().await else {
         return;
     };
-    let app = app(pool);
+    let app = test_app(pool);
 
     let (status, body) = send(&app, empty_request("GET", "/health")).await;
     assert_eq!(status, StatusCode::OK);
@@ -137,6 +146,7 @@ async fn health_and_crud_cycle() {
     let created = body.expect("create body");
     assert_eq!(created["name"], "bolts");
     assert_eq!(created["quantity"], 10);
+    assert!(created["expires_at"].is_null());
     let id = created["id"].as_str().expect("id string").to_string();
 
     let (status, body) = send(&app, empty_request("GET", "/items")).await;
@@ -177,7 +187,7 @@ async fn rejects_invalid_items() {
     let Some(pool) = setup().await else {
         return;
     };
-    let app = app(pool);
+    let app = test_app(pool);
 
     let (status, body) = send(
         &app,
@@ -219,4 +229,39 @@ async fn rejects_invalid_items() {
 
     let (status, _) = send(&app, empty_request("DELETE", &format!("/items/{missing}"))).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn optional_expiry_date() {
+    let _guard = DB_LOCK.lock().await;
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let app = test_app(pool);
+
+    let (status, body) = send(
+        &app,
+        json_request(
+            "POST",
+            "/items",
+            json!({"name": "milk", "quantity": 2, "expires_at": "2026-12-01T12:00:00Z"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let created = body.expect("create body");
+    assert_eq!(created["expires_at"], "2026-12-01T12:00:00Z");
+    let id = created["id"].as_str().expect("id").to_string();
+
+    let (status, body) = send(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/items/{id}"),
+            json!({"name": "milk", "quantity": 2, "expires_at": null}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.expect("update body")["expires_at"].is_null());
 }

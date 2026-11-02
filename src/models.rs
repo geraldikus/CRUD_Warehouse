@@ -13,6 +13,8 @@ pub struct Item {
     pub quantity: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// `None` means the item does not expire. SQL stores that as NULL.
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// JSON body for `POST /items`.
@@ -23,11 +25,15 @@ pub struct Item {
 pub struct CreateItem {
     pub name: String,
     pub quantity: i32,
+    /// Missing field or JSON `null` both become `None`.
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
-/// JSON body for `PUT /items/{id}`. Both fields are required.
+/// JSON body for `PUT /items/{id}`. Name and quantity are required.
+/// `expires_at` is optional: omit it or send `null` to clear the date.
 #[derive(Debug, Deserialize)]
 pub struct UpdateItem {
     pub name: String,
     pub quantity: i32,
+    pub expires_at: Option<DateTime<Utc>>,
 }

@@ -10,6 +10,8 @@
 - PostgreSQL 16
 - tokio — асинхронный рантайм
 - serde / serde_json — JSON
+- [rumqttc](https://github.com/bytebeamio/rumqttc) — клиент MQTT
+- Mosquitto — брокер сообщений (в Docker)
 - tower-http — лог каждого запроса
 - tracing / tracing-subscriber — логи
 - dotenvy — чтение `.env`
@@ -35,9 +37,19 @@ sqlx migrate run
 cargo run
 ```
 
+`cargo run` запускает API (`default-run = warehouse` в `Cargo.toml`). Слушатель событий — отдельная программа, её терминал будет занят так же, как терминал сервера.
+
 Сервер слушает `http://localhost:3000`. Откройте этот адрес в браузере: там страница, с которой можно добавлять, менять и удалять товары. Страница и API на одном адресе, поэтому отдельный фронтенд не нужен.
 
-`docker compose` поднимает Postgres 16 и один раз создаёт вторую базу `warehouse_test` (скрипт `docker/init-test-db.sql`). Она нужна только тестам, чтобы они не стирали данные, с которыми вы играете вручную.
+`docker compose` поднимает Postgres 16 и Mosquitto (MQTT-брокер). Postgres один раз создаёт вторую базу `warehouse_test` (скрипт `docker/init-test-db.sql`). Она нужна только тестам, чтобы они не стирали данные, с которыми вы играете вручную.
+
+Чтобы увидеть события склада, откройте второй терминал до `cargo run`:
+
+```bash
+cargo run --bin mqtt_listener
+```
+
+Создание, изменение и удаление печатают тему и JSON. Чтение списка событий не шлёт. Если Mosquitto выключен, сайт всё равно работает: в логе API будет предупреждение, а товар сохранится в Postgres.
 
 Проверка:
 
@@ -98,6 +110,40 @@ cargo test -- --test-threads=1
 
 Кривой JSON (не объект, не те типы) axum отклоняет сам, кодом `422`. Это не наша проверка полей, а разбор тела запроса.
 
+## MQTT
+
+HTTP отвечает тому, кто спросил. MQTT — объявление для всех, кто слушает. После успешной записи в базу сервер публикует JSON в брокер (QoS 1: доставить хотя бы один раз).
+
+| Событие | Тема | Тело |
+| --- | --- | --- |
+| создали | `warehouse/items/created` | JSON товара |
+| изменили | `warehouse/items/updated` | JSON товара |
+| удалили | `warehouse/items/deleted` | `{"id":"..."}` |
+
+Источник истины — Postgres. Брокер только разносит новость. Интеграционные тесты MQTT не поднимают: у них заглушка, которая ничего не отправляет.
+
+## Срок годности
+
+У товара может не быть даты. В Rust это `Option<DateTime<Utc>>`: `Some(дата)` или `None`. В JSON дата или `null`. В Postgres колонка `expires_at` без `NOT NULL`, то есть SQL `NULL`.
+
+Напоминания не шлёт кнопка Add. Пока работает `cargo run`, рядом с HTTP-сервером крутится задача tokio: раз в минуту смотрит сроки и публикует:
+
+| Когда | Тема | Тело |
+| --- | --- | --- |
+| осталось не больше суток | `warehouse/items/expiring` | товар и `"hours_left": 24` |
+| осталось не больше часа | `warehouse/items/expiring` | товар и `"hours_left": 1` |
+| дата уже прошла | `warehouse/items/expired` | товар |
+
+`hours_left` — имя ступени, не живой обратный отсчёт. Каждая ступень уходит один раз (`expiry_notice` в базе). Смена даты через PUT сбрасывает ступень.
+
+Чтобы не ждать сутки, в том же терминале, где `cargo run`:
+
+```bash
+EXPIRY_DAY_SECS=120 EXPIRY_HOUR_SECS=60 EXPIRY_TICK_SECS=5 cargo run
+```
+
+Создайте товар с датой примерно через 90 секунд. Слушатель сначала увидит «сутки», потом «час», потом «просрочено». Товар без даты этих событий не даёт.
+
 ## Структура
 
 ```
@@ -110,10 +156,14 @@ src/models.rs       Item, CreateItem, UpdateItem
 src/validation.rs   проверки и юнит-тесты
 src/handlers.rs     обработчики запросов
 src/routes.rs       таблица маршрутов
+src/mqtt.rs         публикация событий в брокер
+src/expiry.rs       фоновая проверка сроков годности
+src/bin/mqtt_listener.rs  подписчик, печатает события
 static/index.html   демо-страница, вшивается в бинарник при сборке
+mosquitto/config.conf     локальный брокер без пароля
 migrations/         SQL-миграции SQLx
 tests/api.rs        интеграционные тесты
-docker-compose.yml  Postgres
+docker-compose.yml  Postgres и Mosquitto
 .sqlx/              снимки запросов для сборки без живой базы
 ```
 

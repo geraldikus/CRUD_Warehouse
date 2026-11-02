@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO items (name, quantity)\n        VALUES ($1, $2)\n        RETURNING id, name, quantity, created_at, updated_at\n        ",
+  "query": "\n        SELECT id, name, quantity, created_at, updated_at, expires_at\n        FROM items\n        ORDER BY created_at DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -57,21 +57,30 @@
             "name": "updated_at"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "items",
+            "name": "expires_at"
+          }
+        }
       }
     ],
     "parameters": {
-      "Left": [
-        "Text",
-        "Int4"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "de4e35a22386ad4aa21dd04190bd785f51f3feb1750543038eeb01e49d9a0108"
+  "hash": "8a5bfe2df3fc8f2ffabb23c5468578cd3a587c04beeca9745353b88e9e4260bc"
 }
