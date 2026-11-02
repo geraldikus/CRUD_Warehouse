@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Warehouse</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #12141a;
+      --card: #1c2030;
+      --line: #2c3348;
+      --text: #e8ebf4;
+      --muted: #9aa3b8;
+      --accent: #7aa2ff;
+      --danger: #ff8b8b;
+      --ok: #8ee0b0;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font: 16px/1.45 system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    main {
+      width: min(760px, calc(100% - 32px));
+      margin: 48px auto;
+      padding: 28px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    p { margin: 0; color: var(--muted); }
+
+    .status {
+      margin: 20px 0;
+      color: var(--ok);
+    }
+
+    form, .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    form { margin-bottom: 20px; }
+
+    input {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #10131b;
+      color: var(--text);
+      font: inherit;
+    }
+
+    input[name="name"], .name { flex: 1; min-width: 0; }
+    input[type="number"], .qty { width: 110px; }
+
+    button {
+      padding: 10px 14px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #0d1220;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    button.ghost {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    button.danger { background: #3a2228; color: var(--danger); }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 4px; text-align: left; vertical-align: middle; }
+    th { color: var(--muted); font-weight: 600; font-size: 13px; }
+    .when { color: var(--muted); white-space: nowrap; }
+
+    #error {
+      min-height: 1.4em;
+      margin: 0 0 12px;
+      color: var(--danger);
+    }
+
+    .empty { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Warehouse</h1>
+    <p>A small demo for the inventory CRUD API. This page and the API share localhost:3000.</p>
+    <p class="status" id="health">checking API…</p>
+    <p id="error"></p>
+
+    <form id="create">
+      <input name="name" placeholder="Name" autocomplete="off">
+      <input name="quantity" type="number" min="0" value="0" required>
+      <button type="submit">Add</button>
+    </form>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Quantity</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="items"></tbody>
+    </table>
+  </main>
+
+  <script>
+    const errorEl = document.querySelector("#error");
+    const healthEl = document.querySelector("#health");
+    const tbody = document.querySelector("#items");
+    const form = document.querySelector("#create");
+
+    function showError(message) {
+      errorEl.textContent = message || "";
+    }
+
+    async function errorMessage(response) {
+      try {
+        const body = await response.json();
+        if (body && body.error) return body.error;
+      } catch (_) {
+        /* a non-JSON body still needs a fallback */
+      }
+      return "request failed (" + response.status + ")";
+    }
+
+    async function loadHealth() {
+      const response = await fetch("/health");
+      if (!response.ok) {
+        healthEl.textContent = "API is not responding";
+        return;
+      }
+      const body = await response.json();
+      healthEl.textContent = "API status: " + body.status;
+    }
+
+    function render(items) {
+      tbody.replaceChildren();
+      if (items.length === 0) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 4;
+        cell.className = "empty";
+        cell.textContent = "No items yet.";
+        row.append(cell);
+        tbody.append(row);
+        return;
+      }
+
+      for (const item of items) {
+        const row = document.createElement("tr");
+        const name = document.createElement("input");
+        name.className = "name";
+        name.value = item.name;
+
+        const quantity = document.createElement("input");
+        quantity.className = "qty";
+        quantity.type = "number";
+        quantity.min = "0";
+        quantity.value = String(item.quantity);
+
+        const when = document.createElement("td");
+        when.className = "when";
+        when.textContent = new Date(item.created_at).toLocaleString();
+
+        const actions = document.createElement("td");
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "ghost";
+        save.textContent = "Save";
+        save.addEventListener("click", () => updateItem(item.id, name.value, quantity.value));
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "danger";
+        remove.textContent = "Delete";
+        remove.addEventListener("click", () => deleteItem(item.id, item.name));
+
+        const nameCell = document.createElement("td");
+        nameCell.append(name);
+        const qtyCell = document.createElement("td");
+        qtyCell.append(quantity);
+        actions.append(save, document.createTextNode(" "), remove);
+        row.append(nameCell, qtyCell, when, actions);
+        tbody.append(row);
+      }
+    }
+
+    async function loadItems() {
+      const response = await fetch("/items");
+      if (!response.ok) {
+        showError(await errorMessage(response));
+        return;
+      }
+      render(await response.json());
+    }
+
+    async function updateItem(id, name, quantity) {
+      showError("");
+      const response = await fetch("/items/" + id, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, quantity: Number(quantity) }),
+      });
+      if (!response.ok) {
+        showError(await errorMessage(response));
+        return;
+      }
+      await loadItems();
+    }
+
+    async function deleteItem(id, name) {
+      if (!confirm("Delete " + name + "?")) return;
+      showError("");
+      const response = await fetch("/items/" + id, { method: "DELETE" });
+      if (!response.ok && response.status !== 204) {
+        showError(await errorMessage(response));
+        return;
+      }
+      await loadItems();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      showError("");
+      const data = new FormData(form);
+      const response = await fetch("/items", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: data.get("name"),
+          quantity: Number(data.get("quantity")),
+        }),
+      });
+      if (!response.ok) {
+        showError(await errorMessage(response));
+        return;
+      }
+      form.reset();
+      form.quantity.value = "0";
+      await loadItems();
+    });
+
+    loadHealth();
+    loadItems();
+  </script>
+</body>
+</html>
