@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     options.set_keep_alive(Duration::from_secs(5));
     let (client, mut eventloop) = AsyncClient::new(options, 10);
     client
-        .subscribe("warehouse/items/#", QoS::AtLeastOnce)
+        .subscribe(warehouse_core::topics::ALL, QoS::AtLeastOnce)
         .await?;
     tracing::info!(%host, port, "listening for warehouse/items/#");
 

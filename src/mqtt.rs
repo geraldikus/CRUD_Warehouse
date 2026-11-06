@@ -4,13 +4,9 @@ use rumqttc::{AsyncClient, MqttOptions, QoS};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::models::Item;
+use warehouse_core::topics;
 
-const CREATED_TOPIC: &str = "warehouse/items/created";
-const UPDATED_TOPIC: &str = "warehouse/items/updated";
-const DELETED_TOPIC: &str = "warehouse/items/deleted";
-const EXPIRING_TOPIC: &str = "warehouse/items/expiring";
-const EXPIRED_TOPIC: &str = "warehouse/items/expired";
+use crate::models::Item;
 
 /// Publisher handle shared by request handlers.
 ///
@@ -81,24 +77,24 @@ impl MqttPublisher {
     }
 
     pub async fn publish_created(&self, item: &Item) {
-        self.publish(CREATED_TOPIC, item).await;
+        self.publish(topics::CREATED, item).await;
     }
 
     pub async fn publish_updated(&self, item: &Item) {
-        self.publish(UPDATED_TOPIC, item).await;
+        self.publish(topics::UPDATED, item).await;
     }
 
     pub async fn publish_deleted(&self, id: Uuid) {
-        self.publish(DELETED_TOPIC, &DeletedEvent { id }).await;
+        self.publish(topics::DELETED, &DeletedEvent { id }).await;
     }
 
     pub async fn publish_expiring(&self, item: &Item, hours_left: i64) {
-        self.publish(EXPIRING_TOPIC, &ExpiringEvent { item, hours_left })
+        self.publish(topics::EXPIRING, &ExpiringEvent { item, hours_left })
             .await;
     }
 
     pub async fn publish_expired(&self, item: &Item) {
-        self.publish(EXPIRED_TOPIC, &ExpiredEvent { item }).await;
+        self.publish(topics::EXPIRED, &ExpiredEvent { item }).await;
     }
 
     async fn publish<T: Serialize>(&self, topic: &str, payload: &T) {

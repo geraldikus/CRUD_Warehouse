@@ -31,6 +31,17 @@ impl From<sqlx::Error> for AppError {
     }
 }
 
+/// Lets `?` turn a shared validation failure into HTTP 400.
+///
+/// The desktop client imports the same `ValidationError` and shows it
+/// before the request. The handler still runs the check, because a client
+/// can skip its own UI and post JSON directly.
+impl From<warehouse_core::validation::ValidationError> for AppError {
+    fn from(err: warehouse_core::validation::ValidationError) -> Self {
+        AppError::Validation(err.to_string())
+    }
+}
+
 /// Turns `AppError` into an HTTP response.
 ///
 /// Axum calls this when a handler returns `Err(...)`.

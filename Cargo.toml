@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/warehouse-core", "crates/warehouse-desktop"]
+
 [package]
 name = "warehouse"
 version = "0.1.0"
@@ -6,6 +9,7 @@ default-run = "warehouse"
 
 [dependencies]
 axum = "0.8.9"
+warehouse-core = { path = "crates/warehouse-core" }
 chrono = { version = "0.4.45", features = ["serde"] }
 dotenvy = "0.15.7"
 rumqttc = "0.25.1"

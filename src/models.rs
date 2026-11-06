@@ -1,39 +1,7 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+//! Row types live in `warehouse-core` so the desktop client and the API
+//! share one JSON shape. Handlers still name them as `crate::models::Item`.
+//!
+//! `query_as!` fills the public fields of that struct. It does not need
+//! sqlx to be a dependency of the core crate.
 
-/// One row of the `items` table, also the JSON we send back.
-///
-/// `Serialize` writes this struct to JSON. We do not implement `Deserialize`
-/// here: clients do not send `id` or timestamps when they create an item.
-#[derive(Debug, Clone, Serialize)]
-pub struct Item {
-    pub id: Uuid,
-    pub name: String,
-    pub quantity: i32,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    /// `None` means the item does not expire. SQL stores that as NULL.
-    pub expires_at: Option<DateTime<Utc>>,
-}
-
-/// JSON body for `POST /items`.
-///
-/// `Deserialize` builds this from the request body. Unknown extra fields
-/// are ignored by serde's default.
-#[derive(Debug, Deserialize)]
-pub struct CreateItem {
-    pub name: String,
-    pub quantity: i32,
-    /// Missing field or JSON `null` both become `None`.
-    pub expires_at: Option<DateTime<Utc>>,
-}
-
-/// JSON body for `PUT /items/{id}`. Name and quantity are required.
-/// `expires_at` is optional: omit it or send `null` to clear the date.
-#[derive(Debug, Deserialize)]
-pub struct UpdateItem {
-    pub name: String,
-    pub quantity: i32,
-    pub expires_at: Option<DateTime<Utc>>,
-}
+pub use warehouse_core::models::{CreateItem, Item, UpdateItem};
