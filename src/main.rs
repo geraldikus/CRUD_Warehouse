@@ -5,6 +5,7 @@ use warehouse::AppState;
 use warehouse::config::Config;
 use warehouse::db;
 use warehouse::expiry;
+use warehouse::llm::GroqClient;
 use warehouse::mqtt::MqttPublisher;
 
 #[tokio::main]
@@ -26,7 +27,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let state = AppState { pool, mqtt };
+    let llm = config
+        .groq_api_key
+        .as_ref()
+        .map(|key| GroqClient::new(key, &config.groq_model, &config.groq_base_url));
+    if llm.is_none() {
+        tracing::warn!("GROQ_API_KEY is not set, POST /assistant will return 503");
+    }
+
+    let state = AppState { pool, mqtt, llm };
     // Same process as the HTTP server, separate task. Ctrl+C stops both.
     tokio::spawn(expiry::run_loop(state.clone()));
     let app = warehouse::app(state);

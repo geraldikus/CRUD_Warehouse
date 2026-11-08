@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use jiff::civil::Date;
 use uuid::Uuid;
-use warehouse_core::models::{CreateItem, Item, UpdateItem};
+use warehouse_core::models::{
+    AssistantReply, ChatMessage, ChatRole, CreateItem, Item, PendingDelete, UpdateItem,
+};
 use warehouse_core::validation::validate_item;
 
 use crate::expiry::{civil_date_of, utc_end_of_civil_day};
@@ -21,6 +23,10 @@ pub struct WarehouseApp {
     form_has_expiry: bool,
     form_expiry: Date,
     editing: Option<Uuid>,
+    chat: Vec<ChatMessage>,
+    chat_input: String,
+    chat_busy: bool,
+    pending_delete: Option<PendingDelete>,
     now: DateTime<Utc>,
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -46,6 +52,10 @@ impl WarehouseApp {
             form_has_expiry: false,
             form_expiry: today(),
             editing: None,
+            chat: Vec::new(),
+            chat_input: String::new(),
+            chat_busy: false,
+            pending_delete: None,
             now: Utc::now(),
             commands,
             events,
@@ -63,6 +73,11 @@ impl WarehouseApp {
         match event {
             Event::Items(items) => self.items = items,
             Event::Error(message) => self.error = Some(message),
+            Event::AssistantError(message) => {
+                self.chat_busy = false;
+                self.error = Some(message);
+            }
+            Event::AssistantReply(reply) => self.apply_reply(reply),
             Event::Mqtt(online) => self.mqtt_online = online,
             Event::Remote(RemoteEvent::Changed) => {}
             Event::Remote(RemoteEvent::Expiring { name, hours_left }) => {
@@ -72,6 +87,34 @@ impl WarehouseApp {
                 self.push_notice(format!("{name}: expired"));
             }
         }
+    }
+
+    fn apply_reply(&mut self, reply: AssistantReply) {
+        self.chat_busy = false;
+        self.pending_delete = reply.pending_delete;
+        self.chat.push(ChatMessage {
+            role: ChatRole::Assistant,
+            text: reply.reply,
+        });
+    }
+
+    /// The worker sends the whole transcript. Tool calls stay on the server.
+    fn send_chat(&mut self) {
+        if self.chat_busy {
+            return;
+        }
+        let text = self.chat_input.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        self.chat.push(ChatMessage {
+            role: ChatRole::User,
+            text,
+        });
+        self.chat_input.clear();
+        self.chat_busy = true;
+        self.error = None;
+        let _ = self.commands.send(Command::Ask(self.chat.clone()));
     }
 
     fn push_notice(&mut self, text: String) {
@@ -245,6 +288,62 @@ impl WarehouseApp {
         }
     }
 
+    fn chat_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Assistant");
+        if self.chat_busy {
+            ui.label("Thinking...");
+        }
+
+        // Clone the id out of the option so the buttons can clear it.
+        // The closure would otherwise borrow `self` twice.
+        let pending = self.pending_delete.clone();
+        if let Some(pending) = pending {
+            ui.label(format!("Delete {}?", pending.name));
+            ui.horizontal(|ui| {
+                if ui.button("Confirm delete").clicked() {
+                    let _ = self.commands.send(Command::Delete(pending.id));
+                    self.pending_delete = None;
+                }
+                if ui.button("Keep item").clicked() {
+                    self.pending_delete = None;
+                }
+            });
+        }
+
+        let scroll_height = (ui.available_height() - 40.0).max(80.0);
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .max_height(scroll_height)
+            .show(ui, |ui| {
+                if self.chat.is_empty() && !self.chat_busy {
+                    ui.label("Ask about stock, or tell me to add an item.");
+                }
+                for message in &self.chat {
+                    let who = match message.role {
+                        ChatRole::User => "You",
+                        ChatRole::Assistant => "Assistant",
+                    };
+                    ui.label(format!("{who}: {}", message.text));
+                }
+            });
+
+        ui.horizontal(|ui| {
+            let width = (ui.available_width() - 64.0).max(80.0);
+            let editor = egui::TextEdit::singleline(&mut self.chat_input)
+                .hint_text("Ask the warehouse")
+                .desired_width(width);
+            let response = ui.add_enabled(!self.chat_busy, editor);
+            let submit =
+                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let send = ui
+                .add_enabled(!self.chat_busy, egui::Button::new("Send"))
+                .clicked();
+            if submit || send {
+                self.send_chat();
+            }
+        });
+    }
+
     fn status_bar(&self, ui: &mut egui::Ui) {
         if let Some(error) = &self.error {
             ui.colored_label(egui::Color32::from_rgb(190, 50, 50), error);
@@ -268,6 +367,11 @@ impl eframe::App for WarehouseApp {
         // only drains the network channel.
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        egui::Panel::right("assistant")
+            .default_size(320.0)
+            .min_size(240.0)
+            .max_size(480.0)
+            .show(ui, |ui| self.chat_panel(ui));
         egui::CentralPanel::default().show(ui, |ui| {
             self.form(ui);
             ui.separator();
@@ -447,5 +551,138 @@ mod tests {
         // so the text appears on the following frame.
         harness.run();
         harness.get_by_label(&message);
+    }
+
+    #[test]
+    fn send_chat_queues_the_transcript_and_ignores_a_second_send() {
+        let (mut app, mut commands) = disconnected();
+        app.chat_input = "  add bolts  ".to_string();
+        app.send_chat();
+
+        match commands.try_recv().unwrap() {
+            Command::Ask(messages) => {
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].role, ChatRole::User);
+                assert_eq!(messages[0].text, "add bolts");
+            }
+            other => panic!("expected ask, got {other:?}"),
+        }
+        assert!(app.chat_busy);
+        assert!(app.chat_input.is_empty());
+
+        app.chat_input = "again".to_string();
+        app.send_chat();
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
+    fn blank_chat_input_does_not_send() {
+        let (mut app, mut commands) = disconnected();
+        app.chat_input = "   ".to_string();
+        app.send_chat();
+        assert!(commands.try_recv().is_err());
+        assert!(app.chat.is_empty());
+        assert!(!app.chat_busy);
+    }
+
+    #[test]
+    fn assistant_reply_unlocks_input_and_stores_a_pending_delete() {
+        let (mut app, _rx) = disconnected();
+        app.chat_busy = true;
+        let id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        app.apply_event(Event::AssistantReply(AssistantReply {
+            reply: "Press confirm.".to_string(),
+            changed: true,
+            pending_delete: Some(PendingDelete {
+                id,
+                name: "bolts".to_string(),
+            }),
+        }));
+
+        assert!(!app.chat_busy);
+        assert_eq!(app.chat.len(), 1);
+        assert_eq!(app.chat[0].role, ChatRole::Assistant);
+        assert_eq!(app.chat[0].text, "Press confirm.");
+        assert_eq!(app.pending_delete.unwrap().id, id);
+    }
+
+    #[test]
+    fn assistant_error_unlocks_the_input() {
+        let (mut app, _rx) = disconnected();
+        app.chat_busy = true;
+        app.apply_event(Event::AssistantError(
+            "assistant request failed".to_string(),
+        ));
+        assert!(!app.chat_busy);
+        assert_eq!(app.error.as_deref(), Some("assistant request failed"));
+    }
+
+    #[test]
+    fn send_button_asks_the_assistant() {
+        let (mut app, mut commands) = disconnected();
+        app.chat_input = "add 3 bolts".to_string();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 720.0))
+            .build_eframe(|_cc| app);
+
+        harness.get_by_label("Send").click();
+        harness.run();
+
+        match commands.try_recv().unwrap() {
+            Command::Ask(messages) => {
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].text, "add 3 bolts");
+            }
+            other => panic!("expected ask, got {other:?}"),
+        }
+        assert!(harness.state().chat_busy);
+    }
+
+    #[test]
+    fn assistant_reply_is_visible_in_the_panel() {
+        let (mut app, _rx) = disconnected();
+        app.apply_event(Event::AssistantReply(AssistantReply {
+            reply: "Added bolts.".to_string(),
+            changed: false,
+            pending_delete: None,
+        }));
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 720.0))
+            .build_eframe(|_cc| app);
+
+        harness.run();
+        harness.get_by_label("Assistant: Added bolts.");
+    }
+
+    #[test]
+    fn confirm_delete_sends_delete_and_keep_does_not() {
+        let (mut app, mut commands) = disconnected();
+        let id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        app.pending_delete = Some(PendingDelete {
+            id,
+            name: "bolts".to_string(),
+        });
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 720.0))
+            .build_eframe(|_cc| app);
+
+        harness.get_by_label("Confirm delete").click();
+        harness.run();
+
+        match commands.try_recv().unwrap() {
+            Command::Delete(got) => assert_eq!(got, id),
+            other => panic!("expected delete, got {other:?}"),
+        }
+        assert!(harness.state().pending_delete.is_none());
+
+        harness.state_mut().pending_delete = Some(PendingDelete {
+            id,
+            name: "bolts".to_string(),
+        });
+        harness.run();
+        harness.get_by_label("Keep item").click();
+        harness.run();
+        assert!(harness.state().pending_delete.is_none());
+        assert!(commands.try_recv().is_err());
     }
 }

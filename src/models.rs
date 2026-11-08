@@ -4,4 +4,7 @@
 //! `query_as!` fills the public fields of that struct. It does not need
 //! sqlx to be a dependency of the core crate.
 
-pub use warehouse_core::models::{CreateItem, Item, UpdateItem};
+pub use warehouse_core::models::{
+    AssistantReply, AssistantRequest, ChatMessage, ChatRole, CreateItem, Item, PendingDelete,
+    UpdateItem,
+};

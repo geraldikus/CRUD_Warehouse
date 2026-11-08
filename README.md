@@ -1,36 +1,36 @@
 # Warehouse Item Manager API
 
-Небольшой REST API для учёта товаров на складе: создать позицию, посмотреть список, изменить количество и удалить. Рядом с API есть десктопное окно на egui. Оно ходит в тот же REST и слушает те же MQTT-события. Сервис показывает обычный набор задач: HTTP, PostgreSQL, проверка входных данных, интерфейс, ошибки и тесты.
+A small REST API for warehouse inventory: create items, list them, change quantities, and delete them. A desktop egui window talks to the same REST API and listens to the same MQTT events. The project covers a typical stack: HTTP, PostgreSQL, input validation, UI, errors, and tests.
 
-## Стек
+## Stack
 
 - Rust (stable)
-- [axum](https://github.com/tokio-rs/axum) — HTTP-фреймворк
-- [SQLx](https://github.com/launchbadge/sqlx) — SQL без ORM, запросы проверяются при компиляции
+- [axum](https://github.com/tokio-rs/axum) — HTTP framework
+- [SQLx](https://github.com/launchbadge/sqlx) — SQL without an ORM; queries checked at compile time
 - PostgreSQL 16
-- tokio — асинхронный рантайм
+- tokio — async runtime
 - serde / serde_json — JSON
-- [rumqttc](https://github.com/bytebeamio/rumqttc) — клиент MQTT
-- Mosquitto — брокер сообщений (в Docker)
-- [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui/tree/main/crates/eframe) — десктопное окно
-- reqwest — HTTP-клиент этого окна
-- tower-http — лог каждого запроса
-- tracing / tracing-subscriber — логи
-- dotenvy — чтение `.env`
+- [rumqttc](https://github.com/bytebeamio/rumqttc) — MQTT client
+- Mosquitto — message broker (in Docker)
+- [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui/tree/main/crates/eframe) — desktop window
+- reqwest — HTTP client for the window and Groq calls on the server
+- tower-http — log each request
+- tracing / tracing-subscriber — logging
+- dotenvy — read `.env`
 
-ORM (Diesel, SeaORM) здесь нет. Запросы написаны обычным SQL.
+There is no ORM (Diesel, SeaORM). Queries are plain SQL.
 
-## Что поставить один раз
+## One-time setup
 
-- Rust: `brew install rustup`, затем один раз запустить `rustup-init` (или просто `rustup default stable`, если формула Homebrew уже без `rustup-init`). `cargo` — это менеджер пакетов и сборщик, аналог `npm`.
-- OrbStack (или другой Docker): `brew install --cask orbstack`
-- Клиент миграций, версия как у библиотеки sqlx в `Cargo.toml`:
+- Rust: `brew install rustup`, then run `rustup-init` once (or `rustup default stable` if the Homebrew formula no longer ships `rustup-init`). `cargo` is the package manager and build tool, similar to `npm`.
+- OrbStack (or another Docker runtime): `brew install --cask orbstack`
+- Migration CLI, version aligned with sqlx in `Cargo.toml`:
 
 ```bash
 cargo install sqlx-cli --no-default-features --features rustls,postgres
 ```
 
-## Как запустить
+## How to run
 
 ```bash
 cp .env.example .env
@@ -39,21 +39,21 @@ sqlx migrate run
 cargo run
 ```
 
-`cargo run` запускает API (`default-run = warehouse` в `Cargo.toml`). Слушатель событий — отдельная программа, её терминал будет занят так же, как терминал сервера.
+`cargo run` starts the API (`default-run = warehouse` in `Cargo.toml`). The event listener is a separate binary and keeps its terminal busy like the server does.
 
-Сервер слушает `http://localhost:3000`. Откройте этот адрес в браузере: там страница, с которой можно добавлять, менять и удалять товары. Страница и API на одном адресе, поэтому отдельный фронтенд не нужен.
+The server listens on `http://localhost:3000`. Open that URL in a browser for a page where you can add, edit, and delete items. The page and API share the same origin, so you do not need a separate frontend.
 
-`docker compose` поднимает Postgres 16 и Mosquitto (MQTT-брокер). Postgres один раз создаёт вторую базу `warehouse_test` (скрипт `docker/init-test-db.sql`). Она нужна только тестам, чтобы они не стирали данные, с которыми вы играете вручную.
+`docker compose` starts Postgres 16 and Mosquitto (MQTT broker). Postgres also creates a second database `warehouse_test` once (`docker/init-test-db.sql`). Tests use it so they do not wipe data you use manually.
 
-Чтобы увидеть события склада, откройте второй терминал до `cargo run`:
+To print warehouse events, open a second terminal before `cargo run`:
 
 ```bash
 cargo run --bin mqtt_listener
 ```
 
-Создание, изменение и удаление печатают тему и JSON. Чтение списка событий не шлёт. Если Mosquitto выключен, сайт всё равно работает: в логе API будет предупреждение, а товар сохранится в Postgres.
+Create, update, and delete print the topic and JSON. Listing items does not publish events. If Mosquitto is down, the site still works: the API logs a warning and items are stored in Postgres.
 
-Проверка:
+Quick check:
 
 ```bash
 curl -s localhost:3000/health
@@ -63,172 +63,204 @@ curl -s -X POST localhost:3000/items \
   -d '{"name":"bolts","quantity":10}'
 ```
 
-Остановка сервера: Ctrl+C. Процесс перестаёт принимать новые запросы и дожидается тех, что уже начались.
+Stop the server with Ctrl+C. It stops accepting new requests and waits for in-flight ones to finish.
 
-Десктопное окно — отдельная программа. Запускайте её из корня репозитория, чтобы подхватился `.env`, и держите API уже запущенным:
+The desktop window is a separate program. Run it from the repo root so `.env` is loaded, with the API already running:
 
 ```bash
 cargo run -p warehouse-desktop
 ```
 
-Окно читает `WAREHOUSE_API_URL` (по умолчанию `http://localhost:3000`) и те же `MQTT_HOST` / `MQTT_PORT`, что и сервер. Список товаров, форма и кнопки Edit / Delete ходят в REST. Если Mosquitto поднят, второе такое же окно видит изменения без кнопки Refresh, а напоминания о сроке годности появляются внизу. Если брокер выключен, в шапке будет MQTT offline, а создавать товары всё равно можно.
+The window reads `WAREHOUSE_API_URL` (default `http://localhost:3000`) and the same `MQTT_HOST` / `MQTT_PORT` as the server. The item list, form, and Edit / Delete buttons use REST. With Mosquitto up, a second window sees changes without pressing Refresh, and expiry reminders appear at the bottom. If the broker is down, the header shows MQTT offline; you can still create items.
 
-## Как запустить тесты
+The same window has an Assistant panel on the right. It works only when `GROQ_API_KEY` is set in `.env` and the API is restarted. Default model: `openai/gpt-oss-20b` (`GROQ_MODEL`). The key stays on the server: the window sends text to `POST /assistant` and never sees the key. An empty key does not break the warehouse: the server logs a warning and chat gets 503.
+
+## Running tests
 
 ```bash
 cargo test --workspace
 ```
 
-- Юнит-тесты в `warehouse-core` проверяют валидацию и то, что JSON товара читается обратно в ту же структуру. Базу они не трогают.
-- Юнит-тесты в `warehouse-desktop` проверяют разбор MQTT, окраску сроков и то, как окно применяет события. Один тест рисует окно через `egui_kittest`: пустое имя показывает ошибку и не отправляет команду.
-- Интеграционные тесты в `tests/api.rs` ходят в настоящий Postgres по `TEST_DATABASE_URL`. Если переменной нет, тест не падает, а печатает, что он пропущен.
-- Тесты сами накатывают миграции на тестовую базу и очищают таблицу `items`.
-- Запросы идут в роутер напрямую, без открытого порта: так устроен `tower::ServiceExt::oneshot`.
+- Unit tests in `warehouse-core` check validation and that item JSON round-trips into the same struct. They do not touch the database.
+- Unit tests in `warehouse-desktop` cover MQTT parsing, expiry styling, and how the window applies events. `egui_kittest` draws the window: an empty name does not send a command; Send queues a phrase; assistant replies show in the panel; Confirm delete sends deletion.
+- Integration tests in `tests/api.rs` hit real Postgres via `TEST_DATABASE_URL`. If the variable is missing, the test is skipped with a message instead of failing.
+- `tests/assistant.rs` starts a fake Groq server on a random port. Responses are scripted, not live LLM output. Real Groq is never called. `tests/api.rs` and `tests/assistant.rs` are separate processes, so both take the same `pg_advisory_lock` before truncating the table.
+- Tests run migrations on the test database and clear the `items` table.
+- Requests hit the router in-process without opening a port via `tower::ServiceExt::oneshot`.
 
-Оба интеграционных теста делят одну таблицу, поэтому внутри стоит замок. Обычного `cargo test --workspace` достаточно. Если хочется совсем по очереди:
+Both integration test binaries share one table, so they use a lock. `cargo test --workspace` is usually enough. For strictly serial runs:
 
 ```bash
 cargo test --workspace -- --test-threads=1
 ```
 
-## Эндпоинты
+## Endpoints
 
-| Метод | Путь | Что делает |
+| Method | Path | Description |
 | --- | --- | --- |
-| GET | `/` | Демо-страница в браузере. База не нужна, чтобы её открыть. |
-| GET | `/health` | `{"status":"ok"}`. База не нужна. |
-| GET | `/items` | Список всех позиций, новые сверху. |
-| GET | `/items/{id}` | Одна позиция. `404`, если её нет. |
-| POST | `/items` | Создать. `201` и созданная строка. |
-| PUT | `/items/{id}` | Заменить имя и количество. `404`, если нет. |
-| DELETE | `/items/{id}` | Удалить. `204` без тела, или `404`. |
+| GET | `/` | Demo page in the browser. No database required. |
+| GET | `/health` | `{"status":"ok"}`. No database required. |
+| GET | `/items` | List all items, newest first. |
+| GET | `/items/{id}` | One item. `404` if missing. |
+| POST | `/items` | Create. `201` and the created row. |
+| PUT | `/items/{id}` | Replace name and quantity. `404` if missing. |
+| DELETE | `/items/{id}` | Delete. `204` with no body, or `404`. |
+| POST | `/assistant` | Chat. Body: message history. Response: reply text, `changed`, and optionally `pending_delete` when the model asks to delete. |
 
-`id` — это UUID. Тело запроса и ответа — JSON.
+`id` is a UUID. Request and response bodies are JSON.
 
-Тело создания и обновления:
+Create and update body:
 
 ```json
 { "name": "bolts", "quantity": 10 }
 ```
 
-Пустое имя (или имя из одних пробелов) и отрицательное количество дают `400`:
+Empty name (or whitespace only) and negative quantity return `400`:
 
 ```json
 { "error": "name must not be empty" }
 ```
 
-Ошибка базы даёт `500` и короткое сообщение. Подробности остаются в логе сервера, клиенту они не отправляются.
+Database errors return `500` with a short message. Details stay in the server log, not in the client response.
 
-Кривой JSON (не объект, не те типы) axum отклоняет сам, кодом `422`. Это не наша проверка полей, а разбор тела запроса.
+Malformed JSON (not an object, wrong types) is rejected by axum with `422`. That is request parsing, not our field validation.
+
+`POST /assistant` body:
+
+```json
+{ "messages": [{ "role": "user", "text": "add 3 bolts" }] }
+```
+
+Response when the model changed data:
+
+```json
+{ "reply": "Added 3 bolts.", "changed": true, "pending_delete": null }
+```
+
+`changed: true` means a row was written. `pending_delete` is not deletion itself; it asks the user to press Confirm delete. The actual `DELETE` is sent by that button. Without an API key: `503` and `{"error":"assistant is not configured"}`. Groq failures: `502` with a generic message; details only in the server log. Empty history: `400`.
 
 ## MQTT
 
-HTTP отвечает тому, кто спросил. MQTT — объявление для всех, кто слушает. После успешной записи в базу сервер публикует JSON в брокер (QoS 1: доставить хотя бы один раз).
+HTTP answers the caller. MQTT broadcasts to everyone listening. After a successful database write, the server publishes JSON to the broker (QoS 1: at-least-once delivery).
 
-| Событие | Тема | Тело |
+| Event | Topic | Payload |
 | --- | --- | --- |
-| создали | `warehouse/items/created` | JSON товара |
-| изменили | `warehouse/items/updated` | JSON товара |
-| удалили | `warehouse/items/deleted` | `{"id":"..."}` |
+| created | `warehouse/items/created` | item JSON |
+| updated | `warehouse/items/updated` | item JSON |
+| deleted | `warehouse/items/deleted` | `{"id":"..."}` |
 
-Источник истины — Postgres. Брокер только разносит новость. Интеграционные тесты MQTT не поднимают: у них заглушка, которая ничего не отправляет. Десктопное окно подписывается на `warehouse/items/#`. События `created`, `updated` и `deleted` заставляют его заново запросить список. `expiring` и `expired` ещё и пишут строку внизу окна.
+Postgres is the source of truth. The broker only relays news. Integration tests use a stub publisher that sends nothing. The desktop window subscribes to `warehouse/items/#`. `created`, `updated`, and `deleted` trigger a list refresh. `expiring` and `expired` also add a line at the bottom of the window.
 
-## Срок годности
+## Expiry
 
-У товара может не быть даты. В Rust это `Option<DateTime<Utc>>`: `Some(дата)` или `None`. В JSON дата или `null`. В Postgres колонка `expires_at` без `NOT NULL`, то есть SQL `NULL`.
+An item may have no expiry date. In Rust that is `Option<DateTime<Utc>>`: `Some(date)` or `None`. JSON uses a date or `null`. In Postgres, `expires_at` is nullable.
 
-Напоминания не шлёт кнопка Add. Пока работает `cargo run`, рядом с HTTP-сервером крутится задача tokio: раз в минуту смотрит сроки и публикует:
+The Add button does not send reminders. While `cargo run` is active, a tokio task next to the HTTP server checks deadlines every minute and publishes:
 
-| Когда | Тема | Тело |
+| When | Topic | Payload |
 | --- | --- | --- |
-| осталось не больше суток | `warehouse/items/expiring` | товар и `"hours_left": 24` |
-| осталось не больше часа | `warehouse/items/expiring` | товар и `"hours_left": 1` |
-| дата уже прошла | `warehouse/items/expired` | товар |
+| at most one day left | `warehouse/items/expiring` | item and `"hours_left": 24` |
+| at most one hour left | `warehouse/items/expiring` | item and `"hours_left": 1` |
+| past the date | `warehouse/items/expired` | item |
 
-`hours_left` — имя ступени, не живой обратный отсчёт. Каждая ступень уходит один раз (`expiry_notice` в базе). Смена даты через PUT сбрасывает ступень.
+`hours_left` is a ladder step name, not a live countdown. Each step fires once (`expiry_notice` in the database). Changing the date via PUT resets the ladder.
 
-Чтобы не ждать сутки, в том же терминале, где `cargo run`:
+To avoid waiting a full day, in the same terminal as `cargo run`:
 
 ```bash
 EXPIRY_DAY_SECS=120 EXPIRY_HOUR_SECS=60 EXPIRY_TICK_SECS=5 cargo run
 ```
 
-Создайте товар с датой примерно через 90 секунд. Слушатель сначала увидит «сутки», потом «час», потом «просрочено». Товар без даты этих событий не даёт.
+Create an item expiring in about 90 seconds. The listener will see “day”, then “hour”, then “expired”. Items without a date never produce these events.
 
-## Структура
+## Layout
 
 ```
-Cargo.toml            workspace: сервер, warehouse-core, warehouse-desktop
-crates/warehouse-core модели, проверка полей, имена MQTT-тем
-crates/warehouse-desktop  окно egui, HTTP-клиент, подписка MQTT
-src/main.rs           старт сервера, логи, Ctrl+C
-src/lib.rs            сборка роутера; её вызывают и сервер, и тесты
-src/config.rs         DATABASE_URL из окружения
-src/db.rs             пул соединений
-src/error.rs          AppError и перевод ошибки в HTTP-ответ
-src/models.rs         реэкспорт Item, CreateItem, UpdateItem
-src/validation.rs     реэкспорт проверки полей
-src/handlers.rs       обработчики запросов
-src/routes.rs         таблица маршрутов
-src/mqtt.rs           публикация событий в брокер
-src/expiry.rs         фоновая проверка сроков годности
-src/bin/mqtt_listener.rs  подписчик, печатает события
-static/index.html     демо-страница, вшивается в бинарник при сборке
-mosquitto/config.conf локальный брокер без пароля
-migrations/           SQL-миграции SQLx
-tests/api.rs          интеграционные тесты
-docker-compose.yml    Postgres и Mosquitto
-.sqlx/                снимки запросов для сборки без живой базы
+Cargo.toml            workspace: server, warehouse-core, warehouse-desktop
+crates/warehouse-core models, field validation, MQTT topic names
+crates/warehouse-desktop  egui window, HTTP client, MQTT subscription
+src/main.rs           server startup, logging, Ctrl+C
+src/lib.rs            router builder; used by server and tests
+src/config.rs         DATABASE_URL from environment
+src/db.rs             connection pool
+src/error.rs          AppError and HTTP mapping
+src/models.rs         re-exports Item, CreateItem, UpdateItem
+src/validation.rs     re-exports field validation
+src/handlers.rs       REST handlers, thin wrappers over repo
+src/repo.rs           SQL and MQTT shared by REST and assistant
+src/assistant.rs      POST /assistant and tool-calling loop
+src/llm.rs            Groq HTTP client
+src/routes.rs         route table
+src/mqtt.rs           publish events to the broker
+src/expiry.rs         background expiry checker
+src/bin/mqtt_listener.rs  subscriber that prints events
+static/index.html     demo page, compiled into the binary
+mosquitto/config.conf local broker without a password
+migrations/           SQLx SQL migrations
+tests/api.rs          REST integration tests
+tests/assistant.rs    assistant against fake Groq
+docker-compose.yml    Postgres and Mosquitto
+.sqlx/                query snapshots for offline builds
 ```
 
-В коде параметр пути записан как `/items/{id}`. Так требует axum 0.8. Для клиента URL тот же: `/items/550e8400-e29b-41d4-a716-446655440000`.
+Path parameters use `/items/{id}` as required by axum 0.8. Clients use the same URL shape: `/items/550e8400-e29b-41d4-a716-446655440000`.
 
 ## Key technical decisions
 
-### Почему SQLx, а не ORM
+### Why SQLx instead of an ORM
 
-ORM сам собирает SQL из методов вроде `find_by_id`. Удобно, пока запрос простой. Дальше сложнее понять, какой SQL реально уйдёт в базу, и ошибки всплывают уже во время запроса.
+An ORM builds SQL from methods like `find_by_id`. That is convenient until queries get opaque and errors show up only at runtime.
 
-SQLx оставляет SQL в коде как есть. Макрос `query_as!` при сборке подключается к базе, проверяет текст запроса и типы колонок и сверяет их со структурой `Item`. Опечатка в имени колонки или `TEXT` вместо числа — это ошибка компиляции, а не сюрприз в проде. Запрос при этом остаётся явным: его можно скопировать в `psql` и выполнить.
+SQLx keeps SQL in source. The `query_as!` macro connects to the database at build time, checks the query text and column types, and maps them onto `Item`. A typo in a column name or `TEXT` where a number is expected becomes a compile error, not a production surprise. The query stays explicit: you can paste it into `psql` and run it.
 
-### Почему свой AppError, а не anyhow / thiserror
+### Why a custom AppError instead of anyhow / thiserror
 
-`anyhow` — это «какая-то ошибка» для программ, которым не важно, что именно сломалось. HTTP-обработчику важно: не найдено — это `404`, плохие данные — `400`, база — `500`. Свой `enum` как раз перечисляет эти случаи.
+`anyhow` is for “some error” when the program does not care which case failed. HTTP handlers need distinct cases: not found → `404`, bad input → `400`, database → `500`. A dedicated `enum` encodes that.
 
-`thiserror` уменьшает шаблонный код, когда у ошибки много вариантов и для каждого нужна строка `Display`. Здесь вариантов четыре, и главный код — не текст ошибки, а соответствие «вариант → HTTP-статус». Это около двадцати строк вручную, и на них видно, как работает трейт `IntoResponse`. `thiserror` стоило бы взять, если вариантов станет много и каждый должен ещё и красиво печататься в лог.
+`thiserror` reduces boilerplate when many variants need `Display` text. Here there are few variants and the important part is mapping each to an HTTP status—about twenty lines by hand, which also shows how `IntoResponse` works. `thiserror` would pay off if the enum grew much larger.
 
-Рядом реализован `From<sqlx::Error>`. Оператор `?` в обработчике сам превращает ошибку базы в `AppError::Database`. Клиенту уходит общее сообщение, полный текст пишется в лог.
+`From<sqlx::Error>` lets `?` in handlers turn database errors into `AppError::Database`. Clients get a generic message; the full text goes to the log.
 
-### Как устроена проверка SQL при компиляции
+### How compile-time SQL checking works
 
-`query_as!` — это макрос. Он выполняется во время `cargo build`, а не когда приходит запрос. Ему нужна живая база со схемой, поэтому он читает `DATABASE_URL` (из окружения или из `.env`) и спрашивает у Postgres: «такой запрос вообще законный, и какие у него типы?»
+`query_as!` runs at `cargo build`, not per request. It needs a live database with the schema, reads `DATABASE_URL` (from the environment or `.env`), and asks Postgres whether the query is valid and what types it returns.
 
-За это приходится платить: без базы проект не соберётся. Команда `cargo sqlx prepare` сохраняет ответы базы в папку `.sqlx/`. После этого сборка возможна и без Postgres:
+The trade-off: without a database the project may not build. `cargo sqlx prepare` writes snapshots to `.sqlx/`. Then you can build without Postgres:
 
 ```bash
 SQLX_OFFLINE=true cargo build
 ```
 
-`.sqlx/` имеет смысл коммитить. Когда меняете SQL, снова запустите `cargo sqlx prepare`, иначе офлайн-сборка разъедется с кодом.
+Commit `.sqlx/`. After changing SQL, run `cargo sqlx prepare` again or offline builds drift from the code.
 
-### Почему окно ходит в REST, а не в Postgres
+### Why the window uses REST, not Postgres
 
-Проверка полей, публикация MQTT и сброс `expiry_notice` при смене даты живут в обработчиках. Если окно откроет свой пул и напишет `UPDATE` само, оно обойдёт всё это. Страница в браузере и окно egui — два клиента одного API. Источник истины остаётся один.
+Validation, MQTT publication, and resetting `expiry_notice` when the date changes live in handlers. If the window opened its own pool and ran `UPDATE` directly, it would skip that logic. The browser page and the egui window are two clients of one API. One source of truth.
 
-Календарь egui 0.37 отдаёт день как дату `jiff`, а API хранит `chrono::DateTime<Utc>`. Окно переводит выбранный день в `23:59:59` UTC. Так товар не считается просроченным в ту же секунду, как наступил этот день.
+egui 0.37’s date picker gives a calendar day via `jiff`; the API stores `chrono::DateTime<Utc>`. The window maps the selected day to `23:59:59` UTC so the item is not marked expired the instant that calendar day starts.
 
-### Почему сеть не внутри кадра окна
+### Why network I/O is not inside a frame
 
-egui вызывает `App::ui` на каждый кадр и заново описывает весь интерфейс. Запрос внутри этого вызова остановил бы перерисовку до ответа сервера. Поэтому HTTP и MQTT живут в отдельном потоке со своим tokio. Окно кладёт в канал команду (`Refresh`, `Create`, `Update`, `Delete`) и в начале кадра забирает готовые ответы через `try_recv`. После ответа поток вызывает `request_repaint`, иначе egui не узнает, что пора нарисовать новый список.
+egui calls `App::ui` every frame and redraws the whole UI. A network call inside that path would freeze redraw until the server responds. HTTP and MQTT run on a background thread with its own tokio runtime. The window sends commands on a channel (`Refresh`, `Create`, `Update`, `Delete`, `Ask`) and drains replies with `try_recv` at the start of each frame. The worker calls `request_repaint` after a reply so egui schedules another frame. `Ask` waits up to 60 seconds; ordinary warehouse calls still time out at 10.
 
-### Почему проверка полей общая и всё равно повторяется на сервере
+### Why the assistant does not write SQL or delete rows itself
 
-`validate_item` лежит в `warehouse-core`. Окно вызывает её до отправки и сразу показывает текст ошибки. Сервер вызывает её ещё раз: любой клиент может прислать JSON мимо окна, `curl` в том числе. Общая функция не заменяет проверку на границе API.
+The model may only call four functions: list, create, update, and request delete. Arguments deserialize into the same `CreateItem` and `UpdateItem` as REST JSON and pass `validate_item`. Bad quantity is returned to the model as a tool result, not HTTP 500. The model never sees SQL.
 
-### Почему MQTT для окна — best-effort
+`delete_item` does not remove the row. The response includes `pending_delete`; the window shows Confirm delete, and only that button calls `DELETE /items/{id}`.
 
-Как и у сервера, брокер только разносит новость. Postgres остаётся источником истины. Если Mosquitto не отвечает, окно пишет «MQTT offline» и продолжает работать через REST. Идентификатор клиента на брокере включает свежий UUID: два открытых окна не выкидывают друг друга с одного и того же id.
+The server does not store chat history. The window sends the visible transcript each time. Tool calls live inside one HTTP request. If the model requests a tool, the server runs it and returns a `role: tool` message with the matching `tool_call_id`. Groq needs that pairing to continue the dialog.
+
+The key lives in `GROQ_API_KEY` on the server. The window never receives it. Tests override `GROQ_BASE_URL` with a local axum fake so they never hit the network. Default model: `openai/gpt-oss-20b`.
+
+### Why validation is shared but repeated on the server
+
+`validate_item` lives in `warehouse-core`. The window calls it before sending and shows errors immediately. The server calls it again because any client can post JSON directly, including `curl`. Shared validation does not replace checks at the API boundary.
+
+### Why MQTT on the desktop is best-effort
+
+Like on the server, the broker only relays events; Postgres remains authoritative. If Mosquitto is unreachable, the window shows MQTT offline and keeps working over REST. The broker client id includes a fresh UUID so two open windows do not kick each other off the same id.
 
 ## What I learned
 
-_Здесь будет короткий рассказ своими словами: что оказалось непривычным после TypeScript и что хочется запомнить. Заполню после того, как пройду проект._
+_A short note in my own words: what felt unfamiliar after TypeScript and what I want to remember. I will fill this in after finishing the project._

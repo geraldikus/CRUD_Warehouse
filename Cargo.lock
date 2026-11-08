@@ -5114,6 +5114,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "http-body-util",
+ "reqwest",
  "rumqttc",
  "serde",
  "serde_json",

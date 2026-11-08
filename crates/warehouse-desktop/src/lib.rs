@@ -22,7 +22,7 @@ pub fn run() -> eframe::Result {
 
     let config = Config::from_env();
     let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1040.0, 680.0]),
+        viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1320.0, 720.0]),
         ..Default::default()
     };
 

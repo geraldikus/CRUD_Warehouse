@@ -4,8 +4,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
-use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::{Connection, PgConnection, PgPool};
 use tower::ServiceExt;
 use warehouse::mqtt::MqttPublisher;
 use warehouse::{AppState, app};
@@ -13,11 +13,18 @@ use warehouse::{AppState, app};
 /// One lock so two tests never truncate the same table at the same time.
 static DB_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Same key as `tests/assistant.rs`. A connection outside the pool holds it,
+/// and closing that connection releases it. The in-process mutex does not
+/// stop the other test binary from truncating `items` at the same time.
+const TEST_DB_LOCK: i64 = 424242;
+
 /// Connect to the test database, apply migrations, and empty `items`.
 ///
 /// Returns `None` when `TEST_DATABASE_URL` is missing. The test then
 /// returns without failing, and prints how to enable it.
-async fn setup() -> Option<PgPool> {
+///
+/// The second value is the lock connection. Keep it alive until the test ends.
+async fn setup() -> Option<(PgPool, PgConnection)> {
     dotenvy::dotenv().ok();
 
     let url = match env::var("TEST_DATABASE_URL") {
@@ -43,12 +50,21 @@ async fn setup() -> Option<PgPool> {
         .await
         .expect("failed to run migrations on the test database");
 
+    let mut lock = PgConnection::connect(&url)
+        .await
+        .expect("failed to open the test lock connection");
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(TEST_DB_LOCK)
+        .execute(&mut lock)
+        .await
+        .expect("failed to lock the test database");
+
     sqlx::query("TRUNCATE items")
         .execute(&pool)
         .await
         .expect("failed to empty the items table");
 
-    Some(pool)
+    Some((pool, lock))
 }
 
 /// HTTP tests do not need a broker. `Disabled` drops every publish.
@@ -56,6 +72,7 @@ fn test_app(pool: PgPool) -> axum::Router {
     app(AppState {
         pool,
         mqtt: MqttPublisher::disabled(),
+        llm: None,
     })
 }
 
@@ -97,7 +114,7 @@ fn empty_request(method: &str, uri: &str) -> Request<Body> {
 #[tokio::test]
 async fn index_page_is_html() {
     let _guard = DB_LOCK.lock().await;
-    let Some(pool) = setup().await else {
+    let Some((pool, _lock)) = setup().await else {
         return;
     };
 
@@ -128,7 +145,7 @@ async fn index_page_is_html() {
 #[tokio::test]
 async fn health_and_crud_cycle() {
     let _guard = DB_LOCK.lock().await;
-    let Some(pool) = setup().await else {
+    let Some((pool, _lock)) = setup().await else {
         return;
     };
     let app = test_app(pool);
@@ -184,7 +201,7 @@ async fn health_and_crud_cycle() {
 #[tokio::test]
 async fn rejects_invalid_items() {
     let _guard = DB_LOCK.lock().await;
-    let Some(pool) = setup().await else {
+    let Some((pool, _lock)) = setup().await else {
         return;
     };
     let app = test_app(pool);
@@ -234,7 +251,7 @@ async fn rejects_invalid_items() {
 #[tokio::test]
 async fn optional_expiry_date() {
     let _guard = DB_LOCK.lock().await;
-    let Some(pool) = setup().await else {
+    let Some((pool, _lock)) = setup().await else {
         return;
     };
     let app = test_app(pool);

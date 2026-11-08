@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use uuid::Uuid;
-use warehouse_core::models::{CreateItem, Item, UpdateItem};
+use warehouse_core::models::{AssistantReply, AssistantRequest, CreateItem, Item, UpdateItem};
 
 #[derive(Debug)]
 pub(crate) enum ApiError {
@@ -69,6 +69,20 @@ impl ApiClient {
             .http
             .put(format!("{}/items/{id}", self.base))
             .json(input)
+            .send()
+            .await
+            .map_err(transport)?;
+        read_json(response).await
+    }
+
+    /// The assistant may call Groq several times, so this request waits
+    /// longer than a normal item write. The client timeout stays at 10s.
+    pub(crate) async fn ask(&self, request: &AssistantRequest) -> Result<AssistantReply, ApiError> {
+        let response = self
+            .http
+            .post(format!("{}/assistant", self.base))
+            .json(request)
+            .timeout(Duration::from_secs(60))
             .send()
             .await
             .map_err(transport)?;

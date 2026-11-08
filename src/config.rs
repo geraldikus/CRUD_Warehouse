@@ -6,6 +6,11 @@ pub struct Config {
     pub database_url: String,
     pub mqtt_host: String,
     pub mqtt_port: u16,
+    /// `None` when the variable is missing or blank. The HTTP server still
+    /// starts; `POST /assistant` answers 503 until a key is set.
+    pub groq_api_key: Option<String>,
+    pub groq_model: String,
+    pub groq_base_url: String,
 }
 
 impl Config {
@@ -29,10 +34,28 @@ impl Config {
             .and_then(|value| value.parse().ok())
             .unwrap_or(1883);
 
+        // A blank value counts as unset, so `.env.example` can list the key
+        // without turning the assistant on by accident.
+        let groq_api_key = non_empty("GROQ_API_KEY");
+        let groq_model =
+            non_empty("GROQ_MODEL").unwrap_or_else(|| "openai/gpt-oss-20b".to_string());
+        let groq_base_url = non_empty("GROQ_BASE_URL")
+            .unwrap_or_else(|| "https://api.groq.com/openai/v1".to_string());
+
         Self {
             database_url,
             mqtt_host,
             mqtt_port,
+            groq_api_key,
+            groq_model,
+            groq_base_url,
         }
     }
+}
+
+fn non_empty(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }

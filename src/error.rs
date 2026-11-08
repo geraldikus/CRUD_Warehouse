@@ -14,6 +14,11 @@ pub enum AppError {
     Database(sqlx::Error),
     NotFound,
     Validation(String),
+    /// `GROQ_API_KEY` is missing. The rest of the API still works.
+    AssistantUnavailable,
+    /// Groq refused the call, timed out, or returned a body we cannot use.
+    /// The string is for the log. The HTTP body stays generic.
+    Llm(String),
     /// Reserved for failures that are not database errors.
     /// Nothing constructs this yet; kept so new code has one obvious bucket.
     #[allow(dead_code)]
@@ -60,6 +65,17 @@ impl IntoResponse for AppError {
             }
             AppError::NotFound => (StatusCode::NOT_FOUND, "item not found".to_string()),
             AppError::Validation(message) => (StatusCode::BAD_REQUEST, message),
+            AppError::AssistantUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "assistant is not configured".to_string(),
+            ),
+            AppError::Llm(message) => {
+                tracing::error!(error = %message, "assistant request failed");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "assistant request failed".to_string(),
+                )
+            }
             AppError::Internal(message) => {
                 tracing::error!(error = %message, "internal error");
                 (

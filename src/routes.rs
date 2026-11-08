@@ -1,10 +1,11 @@
 use axum::Router;
 use axum::http::Request;
-use axum::routing::get;
+use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use crate::AppState;
+use crate::assistant;
 use crate::handlers;
 
 pub fn router(state: AppState) -> Router {
@@ -18,6 +19,7 @@ pub fn router(state: AppState) -> Router {
                 .put(handlers::update)
                 .delete(handlers::delete),
         )
+        .route("/assistant", post(assistant::handle))
         // The trace layer runs around every handler and logs method + path.
         .layer(
             TraceLayer::new_for_http().on_request(|request: &Request<_>, _span: &Span| {

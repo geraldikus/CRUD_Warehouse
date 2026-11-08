@@ -1,5 +1,7 @@
 use uuid::Uuid;
-use warehouse_core::models::{CreateItem, UpdateItem};
+use warehouse_core::models::{
+    AssistantReply, AssistantRequest, ChatMessage, CreateItem, UpdateItem,
+};
 
 use crate::api::ApiClient;
 use crate::config::Config;
@@ -12,6 +14,8 @@ pub(crate) enum Command {
     Create(CreateItem),
     Update(Uuid, UpdateItem),
     Delete(Uuid),
+    /// The visible transcript, including the line the user just sent.
+    Ask(Vec<ChatMessage>),
 }
 
 /// What the background thread has finished. The window drains this with
@@ -20,6 +24,10 @@ pub(crate) enum Command {
 pub(crate) enum Event {
     Items(Vec<warehouse_core::models::Item>),
     Error(String),
+    /// The assistant request failed. This is separate from [`Event::Error`]
+    /// so a later list refresh cannot clear the "thinking" flag by accident.
+    AssistantError(String),
+    AssistantReply(AssistantReply),
     Remote(RemoteEvent),
     Mqtt(bool),
 }
@@ -96,34 +104,59 @@ async fn report(
     ctx: &egui::Context,
     command: Command,
 ) {
-    let event = match perform(api, command).await {
-        Ok(items) => Event::Items(items),
+    let from_assistant = matches!(&command, Command::Ask(_));
+    match perform(api, command).await {
+        Ok(Event::AssistantReply(reply)) => {
+            let changed = reply.changed;
+            let _ = events.send(Event::AssistantReply(reply));
+            // MQTT may be offline. The table still has to show what the
+            // assistant just wrote.
+            if changed {
+                match api.list().await {
+                    Ok(items) => {
+                        let _ = events.send(Event::Items(items));
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "refresh after assistant failed");
+                        let _ = events.send(Event::Error(err.to_string()));
+                    }
+                }
+            }
+        }
+        Ok(event) => {
+            let _ = events.send(event);
+        }
         Err(err) => {
             tracing::warn!(error = %err, "request failed");
-            Event::Error(err.to_string())
+            let event = if from_assistant {
+                Event::AssistantError(err.to_string())
+            } else {
+                Event::Error(err.to_string())
+            };
+            let _ = events.send(event);
         }
-    };
-    let _ = events.send(event);
+    }
     ctx.request_repaint();
 }
 
-async fn perform(
-    api: &ApiClient,
-    command: Command,
-) -> Result<Vec<warehouse_core::models::Item>, crate::api::ApiError> {
+async fn perform(api: &ApiClient, command: Command) -> Result<Event, crate::api::ApiError> {
     match command {
-        Command::Refresh => api.list().await,
+        Command::Refresh => Ok(Event::Items(api.list().await?)),
         Command::Create(input) => {
             api.create(&input).await?;
-            api.list().await
+            Ok(Event::Items(api.list().await?))
         }
         Command::Update(id, input) => {
             api.update(id, &input).await?;
-            api.list().await
+            Ok(Event::Items(api.list().await?))
         }
         Command::Delete(id) => {
             api.delete(id).await?;
-            api.list().await
+            Ok(Event::Items(api.list().await?))
+        }
+        Command::Ask(messages) => {
+            let reply = api.ask(&AssistantRequest { messages }).await?;
+            Ok(Event::AssistantReply(reply))
         }
     }
 }
