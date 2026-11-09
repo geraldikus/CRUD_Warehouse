@@ -105,7 +105,7 @@ cargo test --workspace -- --test-threads=1
 | POST | `/items` | Create. `201` and the created row. |
 | PUT | `/items/{id}` | Replace name and quantity. `404` if missing. |
 | DELETE | `/items/{id}` | Delete. `204` with no body, or `404`. |
-| POST | `/assistant` | Chat. Body: message history. Response: reply text, `changed`, and optionally `pending_delete` when the model asks to delete. |
+| POST | `/assistant` | Chat. Body: message history. Response: reply text, `changed`, optionally `pending_delete` when the model asks to delete, and optionally `pending_add` when a create matches an existing name. |
 
 `id` is a UUID. Request and response bodies are JSON.
 
@@ -134,10 +134,10 @@ Malformed JSON (not an object, wrong types) is rejected by axum with `422`. That
 Response when the model changed data:
 
 ```json
-{ "reply": "Added 3 bolts.", "changed": true, "pending_delete": null }
+{ "reply": "Added 3 bolts.", "changed": true, "pending_delete": null, "pending_add": null }
 ```
 
-`changed: true` means a row was written. `pending_delete` is not deletion itself; it asks the user to press Confirm delete. The actual `DELETE` is sent by that button. Without an API key: `503` and `{"error":"assistant is not configured"}`. Groq failures: `502` with a generic message; details only in the server log. Empty history: `400`.
+`changed: true` means a row was written. `pending_delete` is not deletion itself; it asks the user to press Confirm delete. The actual `DELETE` is sent by that button. `pending_add` is the same pattern for stock: if `create_item` finds a row with that name, nothing is written and the UI asks Add to existing or Create new. Those buttons call `PUT` or `POST`. Without an API key: `503` and `{"error":"assistant is not configured"}`. Groq failures: `502` with a generic message; details only in the server log. Empty history: `400`.
 
 ## MQTT
 
@@ -248,6 +248,8 @@ egui calls `App::ui` every frame and redraws the whole UI. A network call inside
 The model may only call four functions: list, create, update, and request delete. Arguments deserialize into the same `CreateItem` and `UpdateItem` as REST JSON and pass `validate_item`. Bad quantity is returned to the model as a tool result, not HTTP 500. The model never sees SQL.
 
 `delete_item` does not remove the row. The response includes `pending_delete`; the window shows Confirm delete, and only that button calls `DELETE /items/{id}`.
+
+`create_item` does not insert when a row already uses that name (trim, case-insensitive). The response includes `pending_add`; the UI offers Add to existing (a `PUT` that adds the new quantity) or Create new (`POST`). The warehouse form Add button still inserts a new row.
 
 The server does not store chat history. The window sends the visible transcript each time. Tool calls live inside one HTTP request. If the model requests a tool, the server runs it and returns a `role: tool` message with the matching `tool_call_id`. Groq needs that pairing to continue the dialog.
 

@@ -75,6 +75,27 @@ pub struct PendingDelete {
     pub name: String,
 }
 
+/// One warehouse row that already uses the name the model wanted to create.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingAddMatch {
+    pub id: Uuid,
+    pub name: String,
+    pub quantity: i32,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// The model asked to create an item whose name is already on a row.
+///
+/// Nothing is written yet. The UI offers adding to a match or creating a
+/// new row, then calls `PUT` or `POST` itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingAdd {
+    pub name: String,
+    pub quantity: i32,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub matches: Vec<PendingAddMatch>,
+}
+
 /// Body of a successful `POST /assistant`.
 ///
 /// `changed` means a create or update was committed. The desktop client
@@ -84,6 +105,7 @@ pub struct AssistantReply {
     pub reply: String,
     pub changed: bool,
     pub pending_delete: Option<PendingDelete>,
+    pub pending_add: Option<PendingAdd>,
 }
 
 #[cfg(test)]
@@ -131,11 +153,25 @@ mod tests {
                 id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
                 name: "bolts".to_string(),
             }),
+            pending_add: Some(PendingAdd {
+                name: "Dish".to_string(),
+                quantity: 2,
+                expires_at: None,
+                matches: vec![PendingAddMatch {
+                    id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+                    name: "Dish".to_string(),
+                    quantity: 10,
+                    expires_at: None,
+                }],
+            }),
         };
         let json = serde_json::to_value(&reply).unwrap();
         assert_eq!(json["reply"], "ok");
         assert_eq!(json["changed"], true);
         assert_eq!(json["pending_delete"]["name"], "bolts");
+        assert_eq!(json["pending_add"]["quantity"], 2);
+        assert_eq!(json["pending_add"]["matches"][0]["quantity"], 10);
         assert!(json.get("pendingDelete").is_none());
+        assert!(json.get("pendingAdd").is_none());
     }
 }

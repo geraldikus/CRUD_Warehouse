@@ -12,7 +12,8 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::error::AppError;
 use crate::models::{
-    AssistantReply, AssistantRequest, ChatMessage, ChatRole, CreateItem, PendingDelete, UpdateItem,
+    AssistantReply, AssistantRequest, ChatMessage, ChatRole, CreateItem, PendingAdd,
+    PendingAddMatch, PendingDelete, UpdateItem,
 };
 use crate::repo;
 
@@ -40,6 +41,7 @@ async fn run(state: &AppState, request: AssistantRequest) -> Result<AssistantRep
     let tools = tools();
     let mut changed = false;
     let mut pending_delete = None;
+    let mut pending_add = None;
 
     for _step in 0..MAX_STEPS {
         let response = llm
@@ -58,6 +60,7 @@ async fn run(state: &AppState, request: AssistantRequest) -> Result<AssistantRep
                 },
                 changed,
                 pending_delete,
+                pending_add,
             });
         }
 
@@ -66,6 +69,8 @@ async fn run(state: &AppState, request: AssistantRequest) -> Result<AssistantRep
             tracing::info!(function = %call.name, "assistant tool call");
             let effect = if call.name == "delete_item" && pending_delete.is_some() {
                 ToolEffect::message("only one deletion can wait for confirmation at a time")
+            } else if call.name == "create_item" && pending_add.is_some() {
+                ToolEffect::message("only one add can wait for confirmation at a time")
             } else {
                 execute(state, call).await?
             };
@@ -74,6 +79,9 @@ async fn run(state: &AppState, request: AssistantRequest) -> Result<AssistantRep
             }
             if effect.pending_delete.is_some() {
                 pending_delete = effect.pending_delete.clone();
+            }
+            if effect.pending_add.is_some() {
+                pending_add = effect.pending_add.clone();
             }
             effects.push(effect);
         }
@@ -90,6 +98,7 @@ async fn run(state: &AppState, request: AssistantRequest) -> Result<AssistantRep
         reply: "I stopped after several steps without a final answer.".to_string(),
         changed,
         pending_delete,
+        pending_add,
     })
 }
 
@@ -105,7 +114,9 @@ fn system_instruction(now: DateTime<Utc>) -> String {
          The current time is {now}. \
          Reply in the same language the user uses. \
          Never claim a change succeeded unless the function result says so. \
-         delete_item does not remove the row. Tell the user to press Confirm delete."
+         delete_item does not remove the row. Tell the user to press Confirm delete. \
+         If create_item finds a row with the same name, nothing is written. \
+         Tell the user to press Add to existing or Create new."
     )
 }
 
@@ -123,7 +134,7 @@ fn tools() -> Value {
             "type": "function",
             "function": {
                 "name": "create_item",
-                "description": "Add a new item. quantity must be >= 0. expires_at is RFC 3339 UTC or null.",
+                "description": "Add stock. If a row already uses this name, the app asks the user to add to that row or create a new one. quantity must be >= 0. expires_at is RFC 3339 UTC or null.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -185,6 +196,7 @@ struct ToolEffect {
     response: Value,
     changed: bool,
     pending_delete: Option<PendingDelete>,
+    pending_add: Option<PendingAdd>,
 }
 
 impl ToolEffect {
@@ -193,6 +205,7 @@ impl ToolEffect {
             response: json!({ "error": text }),
             changed: false,
             pending_delete: None,
+            pending_add: None,
         }
     }
 }
@@ -222,18 +235,11 @@ async fn execute(state: &AppState, call: &FunctionCall) -> Result<ToolEffect, Ap
                 response: json!({ "items": items }),
                 changed: false,
                 pending_delete: None,
+                pending_add: None,
             })
         }
         "create_item" => match serde_json::from_value::<CreateItem>(args) {
-            Ok(input) => match repo::create_item(&state.pool, &state.mqtt, input).await {
-                Ok(item) => Ok(ToolEffect {
-                    response: json_item(&item),
-                    changed: true,
-                    pending_delete: None,
-                }),
-                Err(AppError::Validation(message)) => Ok(ToolEffect::message(&message)),
-                Err(other) => Err(other),
-            },
+            Ok(input) => create_or_ask(state, input).await,
             Err(err) => Ok(ToolEffect::message(&format!("invalid arguments: {err}"))),
         },
         "update_item" => match serde_json::from_value::<UpdateArgs>(args) {
@@ -243,6 +249,7 @@ async fn execute(state: &AppState, call: &FunctionCall) -> Result<ToolEffect, Ap
                         response: json_item(&item),
                         changed: true,
                         pending_delete: None,
+                        pending_add: None,
                     }),
                     Err(AppError::Validation(message)) => Ok(ToolEffect::message(&message)),
                     Err(AppError::NotFound) => Ok(ToolEffect::message("item not found")),
@@ -265,12 +272,60 @@ async fn execute(state: &AppState, call: &FunctionCall) -> Result<ToolEffect, Ap
                         id: item.id,
                         name: item.name,
                     }),
+                    pending_add: None,
                 }),
                 None => Ok(ToolEffect::message("item not found")),
             },
             Err(err) => Ok(ToolEffect::message(&format!("invalid arguments: {err}"))),
         },
         other => Ok(ToolEffect::message(&format!("unknown function: {other}"))),
+    }
+}
+
+async fn create_or_ask(state: &AppState, input: CreateItem) -> Result<ToolEffect, AppError> {
+    if let Err(err) = crate::validation::validate_item(input.name.trim(), input.quantity) {
+        return Ok(ToolEffect::message(&err.to_string()));
+    }
+
+    let matches = repo::find_items_by_name(&state.pool, input.name.trim()).await?;
+    if !matches.is_empty() {
+        let pending = PendingAdd {
+            name: input.name.trim().to_string(),
+            quantity: input.quantity,
+            expires_at: input.expires_at,
+            matches: matches.iter().map(pending_add_match).collect(),
+        };
+        return Ok(ToolEffect {
+            response: json!({
+                "status": "confirmation_required",
+                "name": pending.name,
+                "quantity": pending.quantity,
+                "message": "A row with this name already exists. The user must press Add to existing or Create new."
+            }),
+            changed: false,
+            pending_delete: None,
+            pending_add: Some(pending),
+        });
+    }
+
+    match repo::create_item(&state.pool, &state.mqtt, input).await {
+        Ok(item) => Ok(ToolEffect {
+            response: json_item(&item),
+            changed: true,
+            pending_delete: None,
+            pending_add: None,
+        }),
+        Err(AppError::Validation(message)) => Ok(ToolEffect::message(&message)),
+        Err(other) => Err(other),
+    }
+}
+
+fn pending_add_match(item: &crate::models::Item) -> PendingAddMatch {
+    PendingAddMatch {
+        id: item.id,
+        name: item.name.clone(),
+        quantity: item.quantity,
+        expires_at: item.expires_at,
     }
 }
 
@@ -558,5 +613,6 @@ mod tests {
         let text = system_instruction(now);
         assert!(text.contains("2026-11-08"), "{text}");
         assert!(text.contains("Confirm delete"), "{text}");
+        assert!(text.contains("Add to existing"), "{text}");
     }
 }

@@ -247,6 +247,7 @@ async fn create_tool_writes_a_row_and_echoes_the_model_content() {
     assert_eq!(body["reply"], "Added 3 bolts.");
     assert_eq!(body["changed"], true);
     assert!(body["pending_delete"].is_null());
+    assert!(body["pending_add"].is_null());
 
     let (status, body) = send(&app, empty_request("GET", "/items")).await;
     assert_eq!(status, StatusCode::OK);
@@ -328,10 +329,55 @@ async fn delete_tool_waits_for_confirmation() {
     assert_eq!(body["changed"], false);
     assert_eq!(body["pending_delete"]["id"], id);
     assert_eq!(body["pending_delete"]["name"], "bolts");
+    assert!(body["pending_add"].is_null());
 
     let (status, body) = send(&app, empty_request("GET", &format!("/items/{id}"))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.expect("item")["name"], "bolts");
+}
+
+#[tokio::test]
+async fn create_tool_asks_when_the_name_already_exists() {
+    let _guard = DB_LOCK.lock().await;
+    let Some((pool, _lock)) = setup().await else {
+        return;
+    };
+    let app_for_create = app(AppState {
+        pool: pool.clone(),
+        mqtt: MqttPublisher::disabled(),
+        llm: None,
+    });
+    let (status, body) = send(
+        &app_for_create,
+        json_request("POST", "/items", json!({"name": "Dish", "quantity": 10})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = body.expect("created")["id"].as_str().unwrap().to_string();
+
+    let (base_url, _fake) = spawn_fake(vec![
+        call_response("create_item", json!({"name": " dish ", "quantity": 2})),
+        text_response("Dish is already on a row."),
+    ])
+    .await;
+    let app = assistant_app(pool, &base_url);
+
+    let (status, body) = send(&app, ask("add 2 Dish")).await;
+    assert_eq!(status, StatusCode::OK);
+    let body = body.expect("reply");
+    assert_eq!(body["reply"], "Dish is already on a row.");
+    assert_eq!(body["changed"], false);
+    assert!(body["pending_delete"].is_null());
+    assert_eq!(body["pending_add"]["name"], "dish");
+    assert_eq!(body["pending_add"]["quantity"], 2);
+    assert_eq!(body["pending_add"]["matches"][0]["id"], id);
+    assert_eq!(body["pending_add"]["matches"][0]["quantity"], 10);
+
+    let (status, body) = send(&app, empty_request("GET", "/items")).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body.expect("items").as_array().unwrap().clone();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["quantity"], 10);
 }
 
 #[tokio::test]

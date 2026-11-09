@@ -2,12 +2,14 @@ use chrono::{DateTime, Utc};
 use jiff::civil::Date;
 use uuid::Uuid;
 use warehouse_core::models::{
-    AssistantReply, ChatMessage, ChatRole, CreateItem, Item, PendingDelete, UpdateItem,
+    AssistantReply, ChatMessage, ChatRole, CreateItem, Item, PendingAdd, PendingAddMatch,
+    PendingDelete, UpdateItem,
 };
 use warehouse_core::validation::validate_item;
 
 use crate::expiry::{civil_date_of, utc_end_of_civil_day};
 use crate::mqtt::RemoteEvent;
+use crate::theme;
 use crate::worker::{Command, Event};
 
 const MAX_NOTICES: usize = 8;
@@ -27,6 +29,7 @@ pub struct WarehouseApp {
     chat_input: String,
     chat_busy: bool,
     pending_delete: Option<PendingDelete>,
+    pending_add: Option<PendingAdd>,
     now: DateTime<Utc>,
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -34,6 +37,7 @@ pub struct WarehouseApp {
 
 impl WarehouseApp {
     pub fn new(ctx: egui::Context, config: crate::config::Config) -> Self {
+        theme::apply(&ctx);
         let (commands, events) = crate::worker::spawn(ctx, config);
         Self::from_channels(commands, events)
     }
@@ -56,6 +60,7 @@ impl WarehouseApp {
             chat_input: String::new(),
             chat_busy: false,
             pending_delete: None,
+            pending_add: None,
             now: Utc::now(),
             commands,
             events,
@@ -92,10 +97,37 @@ impl WarehouseApp {
     fn apply_reply(&mut self, reply: AssistantReply) {
         self.chat_busy = false;
         self.pending_delete = reply.pending_delete;
+        self.pending_add = reply.pending_add;
         self.chat.push(ChatMessage {
             role: ChatRole::Assistant,
             text: reply.reply,
         });
+    }
+
+    fn add_to_existing(&mut self, existing: &PendingAddMatch) {
+        let Some(pending) = &self.pending_add else {
+            return;
+        };
+        let _ = self.commands.send(Command::Update(
+            existing.id,
+            UpdateItem {
+                name: existing.name.clone(),
+                quantity: existing.quantity + pending.quantity,
+                expires_at: existing.expires_at,
+            },
+        ));
+        self.pending_add = None;
+    }
+
+    fn create_from_pending(&mut self) {
+        let Some(pending) = self.pending_add.take() else {
+            return;
+        };
+        let _ = self.commands.send(Command::Create(CreateItem {
+            name: pending.name,
+            quantity: pending.quantity,
+            expires_at: pending.expires_at,
+        }));
     }
 
     /// The worker sends the whole transcript. Tool calls stay on the server.
@@ -175,52 +207,55 @@ impl WarehouseApp {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Warehouse");
-            if ui.button("Refresh").clicked() {
+            ui.add_space(8.0);
+            if ui.add(theme::accent_button("Refresh")).clicked() {
                 let _ = self.commands.send(Command::Refresh);
             }
             let (text, color) = if self.mqtt_online {
-                ("MQTT online", egui::Color32::from_rgb(30, 140, 60))
+                ("MQTT online", theme::OK)
             } else {
-                ("MQTT offline", egui::Color32::GRAY)
+                ("MQTT offline", theme::MUTED)
             };
-            ui.colored_label(color, text);
-            ui.label(format!("{} items", self.items.len()));
+            chip(ui, text, color);
+            ui.colored_label(theme::MUTED, format!("{} items", self.items.len()));
         });
     }
 
     fn form(&mut self, ui: &mut egui::Ui) {
-        if self.editing.is_some() {
-            ui.label("Editing");
-        }
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.form_name)
-                    .hint_text("Name")
-                    .desired_width(240.0),
-            );
-            ui.add(
-                egui::DragValue::new(&mut self.form_quantity)
-                    .range(0..=i32::MAX)
-                    .speed(1.0)
-                    .prefix("Qty "),
-            );
-            ui.checkbox(&mut self.form_has_expiry, "Expiry");
-            if self.form_has_expiry {
-                ui.add(egui_extras::DatePickerButton::new(&mut self.form_expiry));
+        theme::card_frame().show(ui, |ui| {
+            if self.editing.is_some() {
+                ui.colored_label(theme::ACCENT, "Editing");
             }
-            let label = if self.editing.is_some() {
-                "Save"
-            } else {
-                "Add"
-            };
-            if ui.button(label).clicked() {
-                self.submit();
-            }
-            if self.editing.is_some() && ui.button("Cancel").clicked() {
-                self.editing = None;
-                self.form_name.clear();
-                self.form_has_expiry = false;
-            }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.form_name)
+                        .hint_text("Name")
+                        .desired_width(240.0),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut self.form_quantity)
+                        .range(0..=i32::MAX)
+                        .speed(1.0)
+                        .prefix("Qty "),
+                );
+                ui.checkbox(&mut self.form_has_expiry, "Expiry");
+                if self.form_has_expiry {
+                    ui.add(egui_extras::DatePickerButton::new(&mut self.form_expiry));
+                }
+                let label = if self.editing.is_some() {
+                    "Save"
+                } else {
+                    "Add"
+                };
+                if ui.add(theme::accent_button(label)).clicked() {
+                    self.submit();
+                }
+                if self.editing.is_some() && ui.button("Cancel").clicked() {
+                    self.editing = None;
+                    self.form_name.clear();
+                    self.form_has_expiry = false;
+                }
+            });
         });
     }
 
@@ -241,7 +276,7 @@ impl WarehouseApp {
             .column(egui_extras::Column::exact(110.0))
             .column(egui_extras::Column::exact(180.0))
             .column(egui_extras::Column::exact(200.0))
-            .header(22.0, |mut header| {
+            .header(26.0, |mut header| {
                 header.col(|ui| {
                     ui.strong("Name");
                 });
@@ -258,7 +293,7 @@ impl WarehouseApp {
             .body(|mut body| {
                 for item in &items {
                     let status = crate::expiry::expiry_status(item.expires_at, now);
-                    body.row(28.0, |mut row| {
+                    body.row(32.0, |mut row| {
                         row.col(|ui| labeled(ui, &item.name, status));
                         row.col(|ui| labeled(ui, item.quantity.to_string(), status));
                         row.col(|ui| labeled(ui, format_expiry(item.expires_at), status));
@@ -267,7 +302,7 @@ impl WarehouseApp {
                                 if ui.button("Edit").clicked() {
                                     edit = Some(item.clone());
                                 }
-                                if ui.button("Delete").clicked() {
+                                if ui.add(theme::danger_button("Delete")).clicked() {
                                     delete = Some(item.id);
                                 }
                             });
@@ -290,45 +325,92 @@ impl WarehouseApp {
 
     fn chat_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Assistant");
-        if self.chat_busy {
-            ui.label("Thinking...");
-        }
 
         // Clone the id out of the option so the buttons can clear it.
         // The closure would otherwise borrow `self` twice.
         let pending = self.pending_delete.clone();
         if let Some(pending) = pending {
-            ui.label(format!("Delete {}?", pending.name));
-            ui.horizontal(|ui| {
-                if ui.button("Confirm delete").clicked() {
-                    let _ = self.commands.send(Command::Delete(pending.id));
-                    self.pending_delete = None;
-                }
-                if ui.button("Keep item").clicked() {
-                    self.pending_delete = None;
-                }
-            });
+            egui::Frame::new()
+                .fill(theme::PENDING_BG)
+                .stroke(egui::Stroke::new(1.0, theme::PENDING_LINE))
+                .corner_radius(12)
+                .inner_margin(10)
+                .show(ui, |ui| {
+                    ui.label(format!("Delete {}?", pending.name));
+                    ui.horizontal(|ui| {
+                        if ui.add(theme::danger_button("Confirm delete")).clicked() {
+                            let _ = self.commands.send(Command::Delete(pending.id));
+                            self.pending_delete = None;
+                        }
+                        if ui.button("Keep item").clicked() {
+                            self.pending_delete = None;
+                        }
+                    });
+                });
         }
 
-        let scroll_height = (ui.available_height() - 40.0).max(80.0);
+        let pending_add = self.pending_add.clone();
+        if let Some(pending) = pending_add {
+            egui::Frame::new()
+                .fill(theme::CARD)
+                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                .corner_radius(12)
+                .inner_margin(10)
+                .show(ui, |ui| {
+                    if pending.matches.len() == 1 {
+                        ui.label(format!(
+                            "{} already has {}. Add {} to it, or create a new row?",
+                            pending.matches[0].name, pending.matches[0].quantity, pending.quantity
+                        ));
+                    } else {
+                        ui.label(format!(
+                            "{} already exists. Add {} to an existing row, or create a new row?",
+                            pending.name, pending.quantity
+                        ));
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        let mut chosen = None;
+                        for existing in &pending.matches {
+                            let label = add_to_existing_label(existing);
+                            if ui.add(theme::accent_button(&label)).clicked() {
+                                chosen = Some(existing.clone());
+                            }
+                        }
+                        let create = ui.button("Create new").clicked();
+                        let cancel = ui.button("Cancel").clicked();
+                        if let Some(existing) = chosen {
+                            self.add_to_existing(&existing);
+                        } else if create {
+                            self.create_from_pending();
+                        } else if cancel {
+                            self.pending_add = None;
+                        }
+                    });
+                });
+        }
+
+        let scroll_height = (ui.available_height() - 48.0).max(80.0);
         egui::ScrollArea::vertical()
             .stick_to_bottom(true)
             .max_height(scroll_height)
             .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 if self.chat.is_empty() && !self.chat_busy {
-                    ui.label("Ask about stock, or tell me to add an item.");
+                    ui.colored_label(
+                        theme::MUTED,
+                        "Ask about stock, or tell me to add an item.",
+                    );
                 }
                 for message in &self.chat {
-                    let who = match message.role {
-                        ChatRole::User => "You",
-                        ChatRole::Assistant => "Assistant",
-                    };
-                    ui.label(format!("{who}: {}", message.text));
+                    chat_bubble(ui, message.role, &message.text);
+                }
+                if self.chat_busy {
+                    thinking_indicator(ui);
                 }
             });
 
         ui.horizontal(|ui| {
-            let width = (ui.available_width() - 64.0).max(80.0);
+            let width = (ui.available_width() - 72.0).max(80.0);
             let editor = egui::TextEdit::singleline(&mut self.chat_input)
                 .hint_text("Ask the warehouse")
                 .desired_width(width);
@@ -336,7 +418,7 @@ impl WarehouseApp {
             let submit =
                 response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             let send = ui
-                .add_enabled(!self.chat_busy, egui::Button::new("Send"))
+                .add_enabled(!self.chat_busy, theme::accent_button("Send"))
                 .clicked();
             if submit || send {
                 self.send_chat();
@@ -346,18 +428,21 @@ impl WarehouseApp {
 
     fn status_bar(&self, ui: &mut egui::Ui) {
         if let Some(error) = &self.error {
-            ui.colored_label(egui::Color32::from_rgb(190, 50, 50), error);
+            ui.colored_label(theme::DANGER, error);
         }
         for notice in &self.notices {
-            ui.label(notice);
+            ui.colored_label(theme::MUTED, notice);
         }
     }
 }
 
 impl eframe::App for WarehouseApp {
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain();
         self.now = Utc::now();
+        if self.chat_busy {
+            ctx.request_repaint();
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -368,13 +453,13 @@ impl eframe::App for WarehouseApp {
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::right("assistant")
-            .default_size(320.0)
+            .default_size(360.0)
             .min_size(240.0)
             .max_size(480.0)
             .show(ui, |ui| self.chat_panel(ui));
         egui::CentralPanel::default().show(ui, |ui| {
             self.form(ui);
-            ui.separator();
+            ui.add_space(8.0);
             self.table(ui);
         });
     }
@@ -391,19 +476,114 @@ fn format_expiry(expires_at: Option<DateTime<Utc>>) -> String {
     }
 }
 
+fn add_to_existing_label(existing: &PendingAddMatch) -> String {
+    format!("Add to existing ({})", existing.quantity)
+}
+
 fn labeled(ui: &mut egui::Ui, text: impl Into<String>, status: crate::expiry::ExpiryStatus) {
     let text = text.into();
     match status {
         crate::expiry::ExpiryStatus::Expired => {
-            ui.colored_label(egui::Color32::from_rgb(190, 50, 50), text);
+            ui.colored_label(theme::DANGER, text);
         }
         crate::expiry::ExpiryStatus::Soon => {
-            ui.colored_label(egui::Color32::from_rgb(180, 130, 20), text);
+            ui.colored_label(theme::WARN, text);
         }
         crate::expiry::ExpiryStatus::Ok | crate::expiry::ExpiryStatus::None => {
             ui.label(text);
         }
     }
+}
+
+fn chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    egui::Frame::new()
+        .fill(theme::CARD)
+        .stroke(egui::Stroke::new(1.0, theme::LINE))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            ui.colored_label(color, text);
+        });
+}
+
+fn chat_bubble(ui: &mut egui::Ui, role: ChatRole, text: &str) {
+    let (who, fill, align_right) = match role {
+        ChatRole::User => ("You", theme::BUBBLE_USER, true),
+        ChatRole::Assistant => ("Assistant", theme::BUBBLE_ASSISTANT, false),
+    };
+    let layout = if align_right {
+        egui::Layout::right_to_left(egui::Align::TOP)
+    } else {
+        egui::Layout::left_to_right(egui::Align::TOP)
+    };
+    ui.with_layout(layout, |ui| {
+        let max_width = (ui.available_width() * 0.88).max(80.0);
+        egui::Frame::new()
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0, theme::LINE))
+            .corner_radius(12)
+            .inner_margin(8)
+            .show(ui, |ui| {
+                ui.set_max_width(max_width);
+                ui.vertical(|ui| {
+                    ui.colored_label(theme::MUTED, who);
+                    ui.label(text);
+                });
+            });
+    });
+}
+
+fn thinking_indicator(ui: &mut egui::Ui) {
+    let time = ui.input(|input| input.time);
+    let captions = ["Checking stock…", "Counting crates…", "Thinking…"];
+    let caption = captions[((time / 1.5) as usize) % captions.len()];
+
+    egui::Frame::new()
+        .fill(theme::BUBBLE_ASSISTANT)
+        .stroke(egui::Stroke::new(1.0, theme::LINE))
+        .corner_radius(12)
+        .inner_margin(10)
+        .show(ui, |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(168.0, 36.0), egui::Sense::hover());
+            let painter = ui.painter();
+            for index in 0..3 {
+                let hop = (((time * 3.4 + f64::from(index) * 0.7).sin() as f32) + 1.0) * 5.0;
+                let center = egui::pos2(
+                    rect.left() + 36.0 + index as f32 * 32.0,
+                    rect.center().y + 6.0 - hop,
+                );
+                let crate_rect = egui::Rect::from_center_size(center, egui::vec2(20.0, 16.0));
+                painter.rect_stroke(
+                    crate_rect,
+                    3.0,
+                    egui::Stroke::new(2.0, theme::ACCENT),
+                    egui::StrokeKind::Inside,
+                );
+                painter.hline(
+                    crate_rect.x_range().shrink(3.0),
+                    crate_rect.center().y,
+                    egui::Stroke::new(1.5, theme::ACCENT),
+                );
+            }
+
+            let scan_y = rect.bottom() - 4.0;
+            painter.hline(
+                rect.x_range().shrink(16.0),
+                scan_y,
+                egui::Stroke::new(3.0, theme::LINE),
+            );
+            let scan_width = 48.0;
+            let travel = (rect.width() - 32.0 - scan_width).max(8.0);
+            let x = rect.left() + 16.0 + ((time * 1.6).sin() as f32 * 0.5 + 0.5) * travel;
+            painter.hline(
+                x..=x + scan_width,
+                scan_y,
+                egui::Stroke::new(3.0, theme::ACCENT),
+            );
+
+            ui.add_space(4.0);
+            ui.colored_label(theme::MUTED, caption);
+        });
 }
 
 #[cfg(test)]
@@ -597,6 +777,7 @@ mod tests {
                 id,
                 name: "bolts".to_string(),
             }),
+            pending_add: None,
         }));
 
         assert!(!app.chat_busy);
@@ -626,7 +807,8 @@ mod tests {
             .build_eframe(|_cc| app);
 
         harness.get_by_label("Send").click();
-        harness.run();
+        // The thinking animation requests a repaint every frame, so run() never settles.
+        harness.run_steps(2);
 
         match commands.try_recv().unwrap() {
             Command::Ask(messages) => {
@@ -645,13 +827,14 @@ mod tests {
             reply: "Added bolts.".to_string(),
             changed: false,
             pending_delete: None,
+            pending_add: None,
         }));
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1280.0, 720.0))
             .build_eframe(|_cc| app);
 
         harness.run();
-        harness.get_by_label("Assistant: Added bolts.");
+        harness.get_by_label("Added bolts.");
     }
 
     #[test]
@@ -683,6 +866,80 @@ mod tests {
         harness.get_by_label("Keep item").click();
         harness.run();
         assert!(harness.state().pending_delete.is_none());
+        assert!(commands.try_recv().is_err());
+    }
+
+    fn sample_pending_add() -> PendingAdd {
+        let id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        PendingAdd {
+            name: "Dish".to_string(),
+            quantity: 2,
+            expires_at: None,
+            matches: vec![PendingAddMatch {
+                id,
+                name: "Dish".to_string(),
+                quantity: 10,
+                expires_at: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn assistant_reply_stores_a_pending_add() {
+        let (mut app, _rx) = disconnected();
+        let pending = sample_pending_add();
+        app.apply_event(Event::AssistantReply(AssistantReply {
+            reply: "Dish is already on a row.".to_string(),
+            changed: false,
+            pending_delete: None,
+            pending_add: Some(pending.clone()),
+        }));
+        assert_eq!(app.pending_add, Some(pending));
+    }
+
+    #[test]
+    fn pending_add_buttons_update_create_or_cancel() {
+        let (mut app, mut commands) = disconnected();
+        let pending = sample_pending_add();
+        let id = pending.matches[0].id;
+        app.pending_add = Some(pending);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 720.0))
+            .build_eframe(|_cc| app);
+
+        harness.get_by_label("Add to existing (10)").click();
+        harness.run();
+
+        match commands.try_recv().unwrap() {
+            Command::Update(got, item) => {
+                assert_eq!(got, id);
+                assert_eq!(item.name, "Dish");
+                assert_eq!(item.quantity, 12);
+                assert_eq!(item.expires_at, None);
+            }
+            other => panic!("expected update, got {other:?}"),
+        }
+        assert!(harness.state().pending_add.is_none());
+
+        harness.state_mut().pending_add = Some(sample_pending_add());
+        harness.run();
+        harness.get_by_label("Create new").click();
+        harness.run();
+
+        match commands.try_recv().unwrap() {
+            Command::Create(item) => {
+                assert_eq!(item.name, "Dish");
+                assert_eq!(item.quantity, 2);
+            }
+            other => panic!("expected create, got {other:?}"),
+        }
+        assert!(harness.state().pending_add.is_none());
+
+        harness.state_mut().pending_add = Some(sample_pending_add());
+        harness.run();
+        harness.get_by_label("Cancel").click();
+        harness.run();
+        assert!(harness.state().pending_add.is_none());
         assert!(commands.try_recv().is_err());
     }
 }

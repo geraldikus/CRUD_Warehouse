@@ -15,6 +15,7 @@
       --accent: #7aa2ff;
       --danger: #ff8b8b;
       --ok: #8ee0b0;
+      --chat-width: 360px;
     }
 
     * { box-sizing: border-box; }
@@ -85,6 +86,11 @@
       cursor: pointer;
     }
 
+    button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
     button.ghost {
       background: transparent;
       color: var(--text);
@@ -106,12 +112,302 @@
     th { color: var(--muted); font-weight: 600; font-size: 13px; }
     .when { color: var(--muted); white-space: nowrap; }
 
-    @media (max-width: 720px) {
+    #error {
+      min-height: 1.4em;
+      margin: 0 0 12px;
+      color: var(--danger);
+    }
+
+    .empty { color: var(--muted); }
+
+    .chat {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      bottom: 16px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      width: var(--chat-width);
+      padding: 16px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+      transform: translateX(0);
+      opacity: 1;
+      transition: transform 250ms ease, opacity 250ms ease;
+    }
+
+    body:not(.chat-open) .chat {
+      transform: translateX(calc(100% + 28px));
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .chat-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .chat-head h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .pending {
+      margin-bottom: 12px;
+      padding: 10px;
+      border: 1px solid #5a3038;
+      border-radius: 12px;
+      background: #24181c;
+    }
+
+    .pending p {
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+
+    .pending-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .transcript {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 4px 2px 8px;
+    }
+
+    .chat-empty {
+      margin: auto 0;
+      text-align: center;
+    }
+
+    .bubble {
+      max-width: 88%;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+
+    .bubble.fresh {
+      animation: bubble-in 220ms ease;
+    }
+
+    .bubble.user {
+      align-self: flex-end;
+      background: #243356;
+    }
+
+    .bubble.assistant {
+      align-self: flex-start;
+      background: #161a26;
+    }
+
+    .bubble .who {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .bubble p {
+      margin: 0;
+      color: var(--text);
+      white-space: pre-wrap;
+    }
+
+    .thinking {
+      align-self: flex-start;
+      width: min(100%, 240px);
+      margin: 0;
+      padding: 12px 10px 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #161a26;
+    }
+
+    .crates {
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 10px;
+      height: 36px;
+    }
+
+    .crates span {
+      position: relative;
+      display: block;
+      width: 20px;
+      height: 16px;
+      border: 2px solid var(--accent);
+      border-radius: 3px;
+      background: linear-gradient(#2a3858, #1a2236);
+      transform-origin: center bottom;
+      animation: crate-hop 1.1s ease-in-out infinite;
+    }
+
+    .crates span::before {
+      content: "";
+      position: absolute;
+      top: 5px;
+      right: 2px;
+      left: 2px;
+      height: 2px;
+      background: var(--accent);
+      opacity: 0.75;
+    }
+
+    .crates span:nth-child(2) { animation-delay: 0.16s; }
+    .crates span:nth-child(3) { animation-delay: 0.32s; }
+
+    .scanner {
+      position: relative;
+      height: 4px;
+      margin-top: 10px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: #10131b;
+    }
+
+    .scanner span {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 42%;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: scan 1.25s ease-in-out infinite;
+    }
+
+    .thinking-captions {
+      position: relative;
+      height: 1.3em;
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .thinking-captions span {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      animation: caption-cycle 4.5s ease-in-out infinite;
+    }
+
+    .thinking-captions span:nth-child(2) { animation-delay: 1.5s; }
+    .thinking-captions span:nth-child(3) { animation-delay: 3s; }
+
+    .chat-error {
+      min-height: 0;
+      margin: 0 0 8px;
+      color: var(--danger);
+    }
+
+    #chat-form {
+      display: flex;
+      gap: 8px;
+      margin: 0;
+    }
+
+    #chat-input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .chat-fab {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      z-index: 21;
+      display: grid;
+      place-items: center;
+      width: 56px;
+      height: 56px;
+      padding: 0;
+      border-radius: 50%;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+      animation: fab-pulse 2.2s ease-in-out infinite;
+    }
+
+    .chat-fab svg {
+      width: 26px;
+      height: 26px;
+      fill: none;
+      stroke: #0d1220;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    body.chat-open .chat-fab { display: none; }
+
+    @keyframes bubble-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes crate-hop {
+      0%, 100% { transform: translateY(0) rotate(0deg); }
+      40% { transform: translateY(-10px) rotate(-7deg); }
+      70% { transform: translateY(-1px) rotate(5deg); }
+    }
+
+    @keyframes scan {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(280%); }
+    }
+
+    @keyframes caption-cycle {
+      0% { opacity: 0; }
+      8% { opacity: 1; }
+      28% { opacity: 1; }
+      36% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+
+    @keyframes fab-pulse {
+      0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(122, 162, 255, 0.45); }
+      50% { transform: scale(1.06); box-shadow: 0 0 0 12px rgba(122, 162, 255, 0); }
+    }
+
+    @media (max-width: 860px) {
       main {
         width: min(980px, calc(100% - 16px));
         margin: 16px auto;
-        padding: 16px;
       }
+
+      .chat {
+        top: 8px;
+        right: 8px;
+        bottom: 8px;
+        width: min(var(--chat-width), calc(100% - 16px));
+      }
+    }
+
+    @media (max-width: 720px) {
+      main { padding: 16px; }
 
       form { flex-direction: column; align-items: stretch; }
       form input,
@@ -123,18 +419,33 @@
         max-width: 100%;
         flex: 1 1 auto;
       }
+
+      #chat-form { flex-direction: row; }
+      #chat-form input,
+      #chat-form button {
+        width: auto;
+        flex: 1 1 auto;
+      }
+      #chat-form button { flex: 0 0 auto; width: auto; }
     }
 
-    #error {
-      min-height: 1.4em;
-      margin: 0 0 12px;
-      color: var(--danger);
-    }
+    @media (prefers-reduced-motion: reduce) {
+      .chat,
+      .bubble.fresh,
+      .crates span,
+      .scanner span,
+      .thinking-captions span,
+      .chat-fab {
+        animation: none;
+        transition: none;
+      }
 
-    .empty { color: var(--muted); }
+      .thinking-captions span { opacity: 0; }
+      .thinking-captions span:first-child { opacity: 1; }
+    }
   </style>
 </head>
-<body>
+<body class="chat-open">
   <main>
     <h1>Warehouse</h1>
     <p>A small demo for the inventory CRUD API. This page and the API share localhost:3000.</p>
@@ -164,14 +475,82 @@
     </div>
   </main>
 
+  <aside id="chat" class="chat" aria-label="Assistant">
+    <header class="chat-head">
+      <h2>Assistant</h2>
+      <button type="button" id="chat-close" class="icon-btn" aria-label="Close chat">×</button>
+    </header>
+
+    <div id="pending" class="pending" hidden>
+      <p id="pending-text"></p>
+      <div class="pending-actions">
+        <button type="button" id="confirm-delete" class="danger">Confirm delete</button>
+        <button type="button" id="keep-item" class="ghost">Keep item</button>
+      </div>
+    </div>
+
+    <div id="pending-add" class="pending" hidden>
+      <p id="pending-add-text"></p>
+      <div id="pending-add-actions" class="pending-actions"></div>
+    </div>
+
+    <div id="transcript" class="transcript" aria-live="polite"></div>
+
+    <div id="thinking" class="thinking" hidden>
+      <div class="crates" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="scanner" aria-hidden="true"><span></span></div>
+      <p class="thinking-captions">
+        <span>Checking stock…</span>
+        <span>Counting crates…</span>
+        <span>Thinking…</span>
+      </p>
+    </div>
+
+    <p id="chat-error" class="chat-error" hidden></p>
+
+    <form id="chat-form">
+      <input id="chat-input" placeholder="Ask the warehouse" autocomplete="off">
+      <button type="submit" id="chat-send">Send</button>
+    </form>
+  </aside>
+
+  <button type="button" id="chat-open" class="chat-fab" aria-label="Open chat" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 6.5h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9l-4 3v-3H5a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1z"></path>
+    </svg>
+  </button>
+
   <script>
     const errorEl = document.querySelector("#error");
     const healthEl = document.querySelector("#health");
     const tbody = document.querySelector("#items");
     const form = document.querySelector("#create");
+    const chatPanel = document.querySelector("#chat");
+    const transcriptEl = document.querySelector("#transcript");
+    const thinkingEl = document.querySelector("#thinking");
+    const chatForm = document.querySelector("#chat-form");
+    const chatInput = document.querySelector("#chat-input");
+    const chatSend = document.querySelector("#chat-send");
+    const chatErrorEl = document.querySelector("#chat-error");
+    const pendingEl = document.querySelector("#pending");
+    const pendingText = document.querySelector("#pending-text");
+    const pendingAddEl = document.querySelector("#pending-add");
+    const pendingAddText = document.querySelector("#pending-add-text");
+    const pendingAddActions = document.querySelector("#pending-add-actions");
+    const chatOpenBtn = document.querySelector("#chat-open");
+
+    const chatMessages = [];
+    let chatBusy = false;
+    let pendingDelete = null;
+    let pendingAdd = null;
 
     function showError(message) {
       errorEl.textContent = message || "";
+    }
+
+    function showChatError(message) {
+      chatErrorEl.hidden = !message;
+      chatErrorEl.textContent = message || "";
     }
 
     async function errorMessage(response) {
@@ -307,15 +686,21 @@
       await loadItems();
     }
 
-    async function deleteItem(id, name) {
-      if (!confirm("Delete " + name + "?")) return;
+    async function removeItem(id) {
       showError("");
       const response = await fetch("/items/" + id, { method: "DELETE" });
       if (!response.ok && response.status !== 204) {
         showError(await errorMessage(response));
-        return;
+        return false;
       }
+      if (pendingDelete && pendingDelete.id === id) setPending(null);
       await loadItems();
+      return true;
+    }
+
+    async function deleteItem(id, name) {
+      if (!confirm("Delete " + name + "?")) return;
+      await removeItem(id);
     }
 
     form.addEventListener("submit", async (event) => {
@@ -340,6 +725,208 @@
       await loadItems();
     });
 
+    function setChatOpen(open) {
+      document.body.classList.toggle("chat-open", open);
+      chatPanel.setAttribute("aria-hidden", open ? "false" : "true");
+      if (open) {
+        chatOpenBtn.hidden = true;
+        chatInput.focus();
+        return;
+      }
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        chatOpenBtn.hidden = false;
+      }
+    }
+
+    function setChatBusy(busy) {
+      chatBusy = busy;
+      chatInput.disabled = busy;
+      chatSend.disabled = busy;
+      thinkingEl.hidden = !busy;
+      if (busy) transcriptEl.append(thinkingEl);
+    }
+
+    function setPending(item) {
+      pendingDelete = item;
+      pendingEl.hidden = !item;
+      pendingText.textContent = item ? "Delete " + item.name + "?" : "";
+    }
+
+    function addToExistingLabel(match) {
+      return "Add to existing (" + match.quantity + ")";
+    }
+
+    function setPendingAdd(pending) {
+      pendingAdd = pending;
+      pendingAddEl.hidden = !pending;
+      pendingAddActions.replaceChildren();
+      if (!pending) {
+        pendingAddText.textContent = "";
+        return;
+      }
+
+      if (pending.matches.length === 1) {
+        pendingAddText.textContent =
+          pending.matches[0].name +
+          " already has " +
+          pending.matches[0].quantity +
+          ". Add " +
+          pending.quantity +
+          " to it, or create a new row?";
+      } else {
+        pendingAddText.textContent =
+          pending.name +
+          " already exists. Add " +
+          pending.quantity +
+          " to an existing row, or create a new row?";
+      }
+
+      for (const match of pending.matches) {
+        const add = document.createElement("button");
+        add.type = "button";
+        add.textContent = addToExistingLabel(match);
+        add.addEventListener("click", () => addToExisting(match));
+        pendingAddActions.append(add);
+      }
+
+      const create = document.createElement("button");
+      create.type = "button";
+      create.textContent = "Create new";
+      create.addEventListener("click", createNewFromPending);
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "ghost";
+      cancel.textContent = "Cancel";
+      cancel.addEventListener("click", () => setPendingAdd(null));
+      pendingAddActions.append(create, cancel);
+    }
+
+    async function addToExisting(match) {
+      if (!pendingAdd) return;
+      showError("");
+      const response = await fetch("/items/" + match.id, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: match.name,
+          quantity: Number(match.quantity) + Number(pendingAdd.quantity),
+          expires_at: match.expires_at || null,
+        }),
+      });
+      if (!response.ok) {
+        showError(await errorMessage(response));
+        return;
+      }
+      setPendingAdd(null);
+      await loadItems();
+    }
+
+    async function createNewFromPending() {
+      if (!pendingAdd) return;
+      showError("");
+      const response = await fetch("/items", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: pendingAdd.name,
+          quantity: Number(pendingAdd.quantity),
+          expires_at: pendingAdd.expires_at || null,
+        }),
+      });
+      if (!response.ok) {
+        showError(await errorMessage(response));
+        return;
+      }
+      setPendingAdd(null);
+      await loadItems();
+    }
+
+    function renderTranscript() {
+      transcriptEl.replaceChildren();
+      if (chatMessages.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "chat-empty";
+        empty.textContent = "Ask about stock, or tell me to add an item.";
+        transcriptEl.append(empty);
+        return;
+      }
+
+      chatMessages.forEach((message, index) => {
+        const bubble = document.createElement("div");
+        bubble.className = "bubble " + message.role;
+        if (index === chatMessages.length - 1) bubble.classList.add("fresh");
+
+        const who = document.createElement("span");
+        who.className = "who";
+        who.textContent = message.role === "user" ? "You" : "Assistant";
+
+        const text = document.createElement("p");
+        text.textContent = message.text;
+        bubble.append(who, text);
+        transcriptEl.append(bubble);
+      });
+      if (chatBusy) {
+        thinkingEl.hidden = false;
+        transcriptEl.append(thinkingEl);
+      }
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+
+    chatPanel.addEventListener("transitionend", (event) => {
+      if (event.target !== chatPanel || event.propertyName !== "transform") return;
+      chatOpenBtn.hidden = document.body.classList.contains("chat-open");
+    });
+
+    async function sendChat() {
+      if (chatBusy) return;
+      const text = chatInput.value.trim();
+      if (!text) return;
+
+      chatMessages.push({ role: "user", text });
+      chatInput.value = "";
+      showChatError("");
+      setChatBusy(true);
+      renderTranscript();
+
+      try {
+        const response = await fetch("/assistant", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ messages: chatMessages }),
+        });
+        if (!response.ok) {
+          showChatError(await errorMessage(response));
+          setChatBusy(false);
+          return;
+        }
+
+        const body = await response.json();
+        const reply = body.reply && String(body.reply).trim();
+        chatMessages.push({ role: "assistant", text: reply || "Done." });
+        setPending(body.pending_delete || null);
+        setPendingAdd(body.pending_add || null);
+        setChatBusy(false);
+        renderTranscript();
+        if (body.changed) await loadItems();
+      } catch (_) {
+        showChatError("Could not reach the assistant.");
+        setChatBusy(false);
+      }
+    }
+
+    document.querySelector("#chat-close").addEventListener("click", () => setChatOpen(false));
+    chatOpenBtn.addEventListener("click", () => setChatOpen(true));
+    chatForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      sendChat();
+    });
+    document.querySelector("#confirm-delete").addEventListener("click", () => {
+      if (!pendingDelete) return;
+      removeItem(pendingDelete.id);
+    });
+    document.querySelector("#keep-item").addEventListener("click", () => setPending(null));
+
+    renderTranscript();
     loadHealth();
     loadItems();
   </script>

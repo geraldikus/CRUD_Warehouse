@@ -8,6 +8,7 @@ mod app;
 mod config;
 mod expiry;
 mod mqtt;
+mod theme;
 mod worker;
 
 pub use app::WarehouseApp;

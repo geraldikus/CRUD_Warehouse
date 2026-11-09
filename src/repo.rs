@@ -44,6 +44,24 @@ pub async fn get_item(pool: &PgPool, id: Uuid) -> Result<Option<Item>, AppError>
     Ok(item)
 }
 
+/// Rows whose name matches after trim and case folding.
+pub async fn find_items_by_name(pool: &PgPool, name: &str) -> Result<Vec<Item>, AppError> {
+    let items = sqlx::query_as!(
+        Item,
+        r#"
+        SELECT id, name, quantity, created_at, updated_at, expires_at
+        FROM items
+        WHERE lower(btrim(name)) = lower(btrim($1))
+        ORDER BY created_at DESC
+        "#,
+        name
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(items)
+}
+
 /// Insert one row and announce it. The caller already parsed JSON.
 pub async fn create_item(
     pool: &PgPool,
