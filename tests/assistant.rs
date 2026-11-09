@@ -381,6 +381,44 @@ async fn create_tool_asks_when_the_name_already_exists() {
 }
 
 #[tokio::test]
+async fn add_fallback_when_model_only_replies() {
+    let _guard = DB_LOCK.lock().await;
+    let Some((pool, _lock)) = setup().await else {
+        return;
+    };
+    let app_for_create = app(AppState {
+        pool: pool.clone(),
+        mqtt: MqttPublisher::disabled(),
+        llm: None,
+    });
+    let (status, body) = send(
+        &app_for_create,
+        json_request("POST", "/items", json!({"name": "cow", "quantity": 3})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = body.expect("created")["id"].as_str().unwrap().to_string();
+
+    let (base_url, _fake) =
+        spawn_fake(vec![text_response("Press Add to existing or Create new.")]).await;
+    let app = assistant_app(pool, &base_url);
+
+    let (status, body) = send(&app, ask("add 10 cow")).await;
+    assert_eq!(status, StatusCode::OK);
+    let body = body.expect("reply");
+    assert_eq!(body["changed"], false);
+    assert!(body["pending_delete"].is_null());
+    assert_eq!(body["pending_add"]["name"], "cow");
+    assert_eq!(body["pending_add"]["quantity"], 10);
+    assert_eq!(body["pending_add"]["matches"][0]["id"], id);
+    assert_eq!(body["pending_add"]["matches"][0]["quantity"], 3);
+
+    let (status, body) = send(&app, empty_request("GET", &format!("/items/{id}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.expect("item")["quantity"], 3);
+}
+
+#[tokio::test]
 async fn assistant_without_a_key_is_unavailable() {
     let _guard = DB_LOCK.lock().await;
     let Some((pool, _lock)) = setup().await else {

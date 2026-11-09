@@ -137,7 +137,7 @@ Response when the model changed data:
 { "reply": "Added 3 bolts.", "changed": true, "pending_delete": null, "pending_add": null }
 ```
 
-`changed: true` means a row was written. `pending_delete` is not deletion itself; it asks the user to press Confirm delete. The actual `DELETE` is sent by that button. `pending_add` is the same pattern for stock: if `create_item` finds a row with that name, nothing is written and the UI asks Add to existing or Create new. Those buttons call `PUT` or `POST`. Without an API key: `503` and `{"error":"assistant is not configured"}`. Groq failures: `502` with a generic message; details only in the server log. Empty history: `400`.
+`changed: true` means a row was written. `pending_delete` is not deletion itself; it asks the user to press Confirm delete. The actual `DELETE` is sent by that button. `pending_add` is the same pattern for stock: if `create_item` finds a row with that name, nothing is written and the UI asks Add to existing or Create new. Those buttons call `PUT` or `POST`. If the model only replies without calling `create_item`, the server can still set `pending_add` when the last user message looks like `add N name` and that name already exists. Without an API key: `503` and `{"error":"assistant is not configured"}`. Groq failures: `502` with a generic message; details only in the server log. Empty history: `400`.
 
 ## MQTT
 

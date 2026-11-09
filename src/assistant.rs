@@ -52,16 +52,21 @@ async fn run(state: &AppState, request: AssistantRequest) -> Result<AssistantRep
         let calls = tool_calls(&message).map_err(AppError::Llm)?;
         if calls.is_empty() {
             let text = text_from(&message).trim().to_string();
-            return Ok(AssistantReply {
-                reply: if text.is_empty() {
-                    "Done.".to_string()
-                } else {
-                    text
+            return finalize_reply(
+                state,
+                &request,
+                AssistantReply {
+                    reply: if text.is_empty() {
+                        "Done.".to_string()
+                    } else {
+                        text
+                    },
+                    changed,
+                    pending_delete,
+                    pending_add,
                 },
-                changed,
-                pending_delete,
-                pending_add,
-            });
+            )
+            .await;
         }
 
         let mut effects = Vec::with_capacity(calls.len());
@@ -94,12 +99,17 @@ async fn run(state: &AppState, request: AssistantRequest) -> Result<AssistantRep
         }
     }
 
-    Ok(AssistantReply {
-        reply: "I stopped after several steps without a final answer.".to_string(),
-        changed,
-        pending_delete,
-        pending_add,
-    })
+    finalize_reply(
+        state,
+        &request,
+        AssistantReply {
+            reply: "I stopped after several steps without a final answer.".to_string(),
+            changed,
+            pending_delete,
+            pending_add,
+        },
+    )
+    .await
 }
 
 fn system_instruction(now: DateTime<Utc>) -> String {
@@ -116,8 +126,71 @@ fn system_instruction(now: DateTime<Utc>) -> String {
          Never claim a change succeeded unless the function result says so. \
          delete_item does not remove the row. Tell the user to press Confirm delete. \
          If create_item finds a row with the same name, nothing is written. \
-         Tell the user to press Add to existing or Create new."
+         Tell the user to press Add to existing or Create new. \
+         When the user asks to add stock, always call create_item with the amount to add. \
+         Do not use update_item to add more quantity."
     )
+}
+
+/// If the model skipped `create_item` but the user clearly asked to add stock
+/// and the name already exists, attach `pending_add` so the UI can show buttons.
+async fn finalize_reply(
+    state: &AppState,
+    request: &AssistantRequest,
+    mut reply: AssistantReply,
+) -> Result<AssistantReply, AppError> {
+    if reply.changed || reply.pending_delete.is_some() || reply.pending_add.is_some() {
+        return Ok(reply);
+    }
+
+    let Some(user) = request
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == ChatRole::User)
+    else {
+        return Ok(reply);
+    };
+    let Some((quantity, name)) = parse_add_intent(&user.text) else {
+        return Ok(reply);
+    };
+    if crate::validation::validate_item(&name, quantity).is_err() {
+        return Ok(reply);
+    }
+
+    let matches = repo::find_items_by_name(&state.pool, &name).await?;
+    if matches.is_empty() {
+        return Ok(reply);
+    }
+
+    reply.pending_add = Some(PendingAdd {
+        name,
+        quantity,
+        expires_at: None,
+        matches: matches.iter().map(pending_add_match).collect(),
+    });
+    Ok(reply)
+}
+
+/// `add 10 cow` or `Add 10 cow`.
+fn parse_add_intent(text: &str) -> Option<(i32, String)> {
+    let text = text.trim();
+    if text.len() < 3 || !text.as_bytes()[..3].eq_ignore_ascii_case(b"add") {
+        return None;
+    }
+    match text.as_bytes().get(3) {
+        None => return None,
+        Some(b) if b.is_ascii_whitespace() => {}
+        Some(_) => return None,
+    }
+    let rest = text.get(3..)?.trim_start();
+    let (qty_str, name) = rest.split_once(char::is_whitespace)?;
+    let quantity: i32 = qty_str.parse().ok()?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some((quantity, name.to_string()))
 }
 
 fn tools() -> Value {
@@ -153,7 +226,7 @@ fn tools() -> Value {
             "type": "function",
             "function": {
                 "name": "update_item",
-                "description": "Replace the name, quantity, and expiry of an existing item. Null expires_at clears the date.",
+                "description": "Set the name, quantity, and expiry of an existing item by id. Do not use this to add more stock when the user says add; call create_item instead. Null expires_at clears the date.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -614,5 +687,21 @@ mod tests {
         assert!(text.contains("2026-11-08"), "{text}");
         assert!(text.contains("Confirm delete"), "{text}");
         assert!(text.contains("Add to existing"), "{text}");
+        assert!(text.contains("create_item"), "{text}");
+    }
+
+    #[test]
+    fn parse_add_intent_reads_quantity_and_name() {
+        assert_eq!(
+            parse_add_intent("Add 10 cow"),
+            Some((10, "cow".to_string()))
+        );
+        assert_eq!(
+            parse_add_intent("add 2 big crate"),
+            Some((2, "big crate".to_string()))
+        );
+        assert!(parse_add_intent("update 5 bolts").is_none());
+        assert!(parse_add_intent("add 5").is_none());
+        assert!(parse_add_intent("address book").is_none());
     }
 }
