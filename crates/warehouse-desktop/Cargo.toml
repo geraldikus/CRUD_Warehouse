@@ -5,16 +5,20 @@ edition = "2024"
 
 [dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
+cpal = "0.15.3"
 dotenvy = "0.15.7"
 eframe = "0.37.0"
 egui = "0.37.0"
 egui_extras = { version = "0.37.0", features = ["datepicker"] }
 jiff = { version = "0.2.39", default-features = false, features = ["std", "tz-system"] }
+futures-util = { version = "0.3.31", default-features = false, features = ["sink", "std"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+rodio = "0.19.0"
 rumqttc = "0.25.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "net"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
+tokio-tungstenite = { version = "0.26.2", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.29.0", features = ["serde", "v4"] }

@@ -73,6 +73,7 @@ fn test_app(pool: PgPool) -> axum::Router {
         pool,
         mqtt: MqttPublisher::disabled(),
         llm: None,
+        voice: None,
     })
 }
 

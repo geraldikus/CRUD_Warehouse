@@ -5,10 +5,13 @@
 
 mod api;
 mod app;
+mod audio;
 mod config;
 mod expiry;
 mod mqtt;
+mod speech;
 mod theme;
+mod voice;
 mod worker;
 
 pub use app::WarehouseApp;

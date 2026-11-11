@@ -26,5 +26,28 @@ services:
       timeout: 5s
       retries: 15
 
+  voice:
+    build: ./voice-sidecar
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      MODELS_DIR: /models
+    volumes:
+      - voice-models:/models
+    mem_limit: 1500m
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+
 volumes:
   pgdata:
+  voice-models:

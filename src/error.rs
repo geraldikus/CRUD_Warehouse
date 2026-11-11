@@ -19,6 +19,11 @@ pub enum AppError {
     /// Groq refused the call, timed out, or returned a body we cannot use.
     /// The string is for the log. The HTTP body stays generic.
     Llm(String),
+    /// `VOICE_URL` is empty. Item routes and the text assistant still work.
+    VoiceUnavailable,
+    /// The speech sidecar refused the call or could not be reached.
+    /// The string is for the log. The HTTP body stays generic.
+    Voice(String),
     /// Reserved for failures that are not database errors.
     /// Nothing constructs this yet; kept so new code has one obvious bucket.
     #[allow(dead_code)]
@@ -75,6 +80,14 @@ impl IntoResponse for AppError {
                     StatusCode::BAD_GATEWAY,
                     "assistant request failed".to_string(),
                 )
+            }
+            AppError::VoiceUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "voice is not configured".to_string(),
+            ),
+            AppError::Voice(message) => {
+                tracing::error!(error = %message, "voice request failed");
+                (StatusCode::BAD_GATEWAY, "voice request failed".to_string())
             }
             AppError::Internal(message) => {
                 tracing::error!(error = %message, "internal error");

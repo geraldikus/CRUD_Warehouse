@@ -11,6 +11,9 @@ pub struct Config {
     pub groq_api_key: Option<String>,
     pub groq_model: String,
     pub groq_base_url: String,
+    /// `None` when `VOICE_URL` is set and blank. Missing means the local
+    /// sidecar from docker compose. Speech routes answer 503 until a URL is set.
+    pub voice_url: Option<String>,
 }
 
 impl Config {
@@ -41,6 +44,14 @@ impl Config {
             non_empty("GROQ_MODEL").unwrap_or_else(|| "openai/gpt-oss-20b".to_string());
         let groq_base_url = non_empty("GROQ_BASE_URL")
             .unwrap_or_else(|| "https://api.groq.com/openai/v1".to_string());
+        // Missing variable: local sidecar. Present but blank: voice off.
+        // `non_empty` cannot tell those apart, because a missing variable
+        // and a blank one both come back as `None`.
+        let voice_url = match env::var("VOICE_URL") {
+            Ok(value) if value.trim().is_empty() => None,
+            Ok(value) => Some(value.trim().to_string()),
+            Err(_) => Some("http://localhost:8000".to_string()),
+        };
 
         Self {
             database_url,
@@ -49,6 +60,7 @@ impl Config {
             groq_api_key,
             groq_model,
             groq_base_url,
+            voice_url,
         }
     }
 }

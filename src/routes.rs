@@ -7,6 +7,7 @@ use tracing::Span;
 use crate::AppState;
 use crate::assistant;
 use crate::handlers;
+use crate::voice;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -20,6 +21,8 @@ pub fn router(state: AppState) -> Router {
                 .delete(handlers::delete),
         )
         .route("/assistant", post(assistant::handle))
+        .route("/voice/stream", get(voice::stream))
+        .route("/voice/tts", post(voice::tts))
         // The trace layer runs around every handler and logs method + path.
         .layer(
             TraceLayer::new_for_http().on_request(|request: &Request<_>, _span: &Span| {

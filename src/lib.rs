@@ -15,11 +15,13 @@ pub mod mqtt;
 mod repo;
 pub mod routes;
 pub mod validation;
+pub mod voice;
 
 use sqlx::PgPool;
 
 use crate::llm::GroqClient;
 use crate::mqtt::MqttPublisher;
+use crate::voice::VoiceClient;
 
 /// Everything a request handler needs.
 ///
@@ -31,6 +33,8 @@ pub struct AppState {
     pub mqtt: MqttPublisher,
     /// `None` when no API key was configured. Item routes ignore this field.
     pub llm: Option<GroqClient>,
+    /// `None` when `VOICE_URL` is blank. Item routes ignore this field.
+    pub voice: Option<VoiceClient>,
 }
 
 /// Build the HTTP router with the database pool and the MQTT publisher.

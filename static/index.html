@@ -15,6 +15,7 @@
       --accent: #7aa2ff;
       --danger: #ff8b8b;
       --ok: #8ee0b0;
+      --warn: #e0b45a;
       --chat-width: 360px;
     }
 
@@ -157,6 +158,16 @@
       margin: 0;
       font-size: 18px;
     }
+
+    .voice-status {
+      margin-right: auto;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .voice-status.listening { color: var(--ok); }
+    .voice-status.speaking { color: var(--warn); }
 
     .icon-btn {
       width: 36px;
@@ -478,6 +489,7 @@
   <aside id="chat" class="chat" aria-label="Assistant">
     <header class="chat-head">
       <h2>Assistant</h2>
+      <span id="voice-status" class="voice-status" hidden></span>
       <button type="button" id="chat-close" class="icon-btn" aria-label="Close chat">×</button>
     </header>
 
@@ -510,6 +522,7 @@
 
     <form id="chat-form">
       <input id="chat-input" placeholder="Ask the warehouse" autocomplete="off">
+      <button type="button" id="chat-listen">Listen</button>
       <button type="submit" id="chat-send">Send</button>
     </form>
   </aside>
@@ -531,6 +544,8 @@
     const chatForm = document.querySelector("#chat-form");
     const chatInput = document.querySelector("#chat-input");
     const chatSend = document.querySelector("#chat-send");
+    const chatListen = document.querySelector("#chat-listen");
+    const voiceStatus = document.querySelector("#voice-status");
     const chatErrorEl = document.querySelector("#chat-error");
     const pendingEl = document.querySelector("#pending");
     const pendingText = document.querySelector("#pending-text");
@@ -543,6 +558,17 @@
     let chatBusy = false;
     let pendingDelete = null;
     let pendingAdd = null;
+    const voice = {
+      listening: false,
+      speaking: false,
+      muted: false,
+      stream: null,
+      context: null,
+      processor: null,
+      silent: null,
+      socket: null,
+      playback: null,
+    };
 
     function showError(message) {
       errorEl.textContent = message || "";
@@ -877,13 +903,251 @@
       chatOpenBtn.hidden = document.body.classList.contains("chat-open");
     });
 
-    async function sendChat() {
+    function stripLinks(text) {
+      let out = "";
+      let index = 0;
+      while (index < text.length) {
+        if (text[index] === "[") {
+          const close = text.indexOf("]", index + 1);
+          if (close !== -1 && text[close + 1] === "(") {
+            const paren = text.indexOf(")", close + 2);
+            if (paren !== -1) {
+              out += text.slice(index + 1, close);
+              index = paren + 1;
+              continue;
+            }
+          }
+        }
+        out += text[index];
+        index += 1;
+      }
+      return out;
+    }
+
+    function forSpeech(text) {
+      let spoken = stripLinks(text)
+        .replaceAll("`", "")
+        .replaceAll("**", "")
+        .replaceAll("__", "")
+        .replaceAll("*", "")
+        .replaceAll("_", "");
+      spoken = spoken
+        .split("\n")
+        .map((line) => line.replace(/^#+/, "").trimStart())
+        .join("\n");
+      return spoken.split(/\s+/).filter(Boolean).join(" ");
+    }
+
+    function resampleToPcm16(samples, fromRate) {
+      const target = 16000;
+      if (!samples.length || !fromRate) return new ArrayBuffer(0);
+      let mono = samples;
+      if (fromRate !== target) {
+        const outLen = Math.floor((samples.length * target) / fromRate);
+        if (outLen === 0) return new ArrayBuffer(0);
+        const resampled = new Float32Array(outLen);
+        const last = samples.length - 1;
+        for (let i = 0; i < outLen; i++) {
+          const position = (i * fromRate) / target;
+          const left = Math.floor(position);
+          const fraction = position - left;
+          const a = samples[Math.min(left, last)];
+          const b = samples[Math.min(left + 1, last)];
+          resampled[i] = a + (b - a) * fraction;
+        }
+        mono = resampled;
+      }
+      const pcm = new Int16Array(mono.length);
+      for (let i = 0; i < mono.length; i++) {
+        const clamped = Math.max(-1, Math.min(1, mono[i]));
+        pcm[i] = Math.round(clamped * 32767);
+      }
+      return pcm.buffer;
+    }
+
+    function updateVoiceUi() {
+      chatListen.textContent = voice.listening ? "Stop" : "Listen";
+      if (voice.speaking) {
+        voiceStatus.hidden = false;
+        voiceStatus.textContent = "speaking";
+        voiceStatus.className = "voice-status speaking";
+      } else if (voice.listening) {
+        voiceStatus.hidden = false;
+        voiceStatus.textContent = "listening";
+        voiceStatus.className = "voice-status listening";
+      } else {
+        voiceStatus.hidden = true;
+        voiceStatus.textContent = "";
+        voiceStatus.className = "voice-status";
+      }
+    }
+
+    function stopPlayback() {
+      if (voice.playback) {
+        voice.playback.pause();
+        voice.playback.src = "";
+        voice.playback = null;
+      }
+    }
+
+    function stopListening() {
+      voice.listening = false;
+      voice.muted = false;
+      if (voice.socket) {
+        const socket = voice.socket;
+        voice.socket = null;
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close();
+        }
+      }
+      if (voice.processor) {
+        voice.processor.onaudioprocess = null;
+        try { voice.processor.disconnect(); } catch (_) { /* already closed */ }
+        voice.processor = null;
+      }
+      if (voice.silent) {
+        try { voice.silent.disconnect(); } catch (_) { /* already closed */ }
+        voice.silent = null;
+      }
+      if (voice.context) {
+        voice.context.close().catch(() => {});
+        voice.context = null;
+      }
+      if (voice.stream) {
+        voice.stream.getTracks().forEach((track) => track.stop());
+        voice.stream = null;
+      }
+      if (!voice.speaking) stopPlayback();
+      updateVoiceUi();
+    }
+
+    function acceptTranscript(text) {
       if (chatBusy) return;
+      const spoken = String(text || "").trim();
+      if (!spoken) return;
+      askAssistant(spoken);
+    }
+
+    async function speakReply(text) {
+      const spoken = forSpeech(text);
+      if (!spoken || !voice.listening) return;
+      voice.speaking = true;
+      voice.muted = true;
+      updateVoiceUi();
+      try {
+        const response = await fetch("/voice/tts", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text: spoken }),
+        });
+        if (!response.ok) {
+          showChatError(await errorMessage(response));
+          return;
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        await new Promise((resolve) => {
+          const audio = new Audio(url);
+          voice.playback = audio;
+          const finish = () => {
+            URL.revokeObjectURL(url);
+            if (voice.playback === audio) voice.playback = null;
+            resolve();
+          };
+          audio.addEventListener("ended", finish);
+          audio.addEventListener("error", finish);
+          audio.play().catch(finish);
+        });
+      } catch (_) {
+        showChatError("Could not play the reply.");
+      } finally {
+        voice.muted = false;
+        voice.speaking = false;
+        updateVoiceUi();
+      }
+    }
+
+    async function startListening() {
+      if (voice.listening) return;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showChatError("microphone is not available");
+        return;
+      }
+      showChatError("");
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (_) {
+        showChatError("microphone permission denied");
+        return;
+      }
+
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(proto + "//" + location.host + "/voice/stream");
+      socket.binaryType = "arraybuffer";
+
+      const context = new AudioContext();
+      const source = context.createMediaStreamSource(stream);
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      const silent = context.createGain();
+      silent.gain.value = 0;
+      processor.onaudioprocess = (event) => {
+        if (!voice.listening || voice.muted) return;
+        if (!voice.socket || voice.socket.readyState !== WebSocket.OPEN) return;
+        const input = event.inputBuffer.getChannelData(0);
+        const pcm = resampleToPcm16(input, event.inputBuffer.sampleRate);
+        if (pcm.byteLength) voice.socket.send(pcm);
+      };
+      source.connect(processor);
+      processor.connect(silent);
+      silent.connect(context.destination);
+      if (context.state === "suspended") await context.resume();
+
+      voice.listening = true;
+      voice.stream = stream;
+      voice.context = context;
+      voice.processor = processor;
+      voice.silent = silent;
+      voice.socket = socket;
+      updateVoiceUi();
+
+      socket.addEventListener("message", (event) => {
+        if (typeof event.data !== "string") return;
+        let message;
+        try {
+          message = JSON.parse(event.data);
+        } catch (_) {
+          return;
+        }
+        if (message.type === "transcript") {
+          acceptTranscript(message.text);
+        } else if (message.type === "error") {
+          showChatError(message.message || "voice request failed");
+        }
+      });
+      socket.addEventListener("close", () => {
+        if (!voice.listening) return;
+        showChatError("voice connection closed");
+        stopListening();
+      });
+      socket.addEventListener("error", () => {
+        showChatError("voice connection closed");
+      });
+    }
+
+    async function sendChat() {
       const text = chatInput.value.trim();
       if (!text) return;
-
-      chatMessages.push({ role: "user", text });
       chatInput.value = "";
+      await askAssistant(text);
+    }
+
+    async function askAssistant(text) {
+      if (chatBusy) return;
+      const spoken = text.trim();
+      if (!spoken) return;
+
+      chatMessages.push({ role: "user", text: spoken });
       showChatError("");
       setChatBusy(true);
       renderTranscript();
@@ -897,6 +1161,7 @@
         if (!response.ok) {
           showChatError(await errorMessage(response));
           setChatBusy(false);
+          renderTranscript();
           return;
         }
 
@@ -908,14 +1173,23 @@
         setChatBusy(false);
         renderTranscript();
         if (body.changed) await loadItems();
+        if (voice.listening) await speakReply(reply || "Done.");
       } catch (_) {
         showChatError("Could not reach the assistant.");
         setChatBusy(false);
+        renderTranscript();
       }
     }
 
-    document.querySelector("#chat-close").addEventListener("click", () => setChatOpen(false));
+    document.querySelector("#chat-close").addEventListener("click", () => {
+      stopListening();
+      setChatOpen(false);
+    });
     chatOpenBtn.addEventListener("click", () => setChatOpen(true));
+    chatListen.addEventListener("click", () => {
+      if (voice.listening) stopListening();
+      else startListening();
+    });
     chatForm.addEventListener("submit", (event) => {
       event.preventDefault();
       sendChat();

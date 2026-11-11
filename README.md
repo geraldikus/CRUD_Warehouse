@@ -1,6 +1,6 @@
 # Warehouse Item Manager API
 
-A small REST API for warehouse inventory: create items, list them, change quantities, and delete them. A desktop egui window talks to the same REST API and listens to the same MQTT events. The project covers a typical stack: HTTP, PostgreSQL, input validation, UI, errors, and tests.
+A small REST API for warehouse inventory: create items, list them, change quantities, and delete them. A desktop egui window talks to the same REST API and listens to the same MQTT events. The window can also listen to the microphone: a local Python service turns speech into text, the existing assistant handles it, and Piper speaks the reply. The project covers a typical stack: HTTP, PostgreSQL, input validation, UI, errors, and tests.
 
 ## Stack
 
@@ -14,6 +14,9 @@ A small REST API for warehouse inventory: create items, list them, change quanti
 - Mosquitto — message broker (in Docker)
 - [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui/tree/main/crates/eframe) — desktop window
 - reqwest — HTTP client for the window and Groq calls on the server
+- [Vosk](https://alphacephei.com/vosk/) small English model — local speech recognition
+- [Silero VAD](https://github.com/snakers4/silero-vad) — local voice activity detection
+- [Piper](https://github.com/OHF-voice/piper1-gpl) `en_US-lessac-low` — local text to speech
 - tower-http — log each request
 - tracing / tracing-subscriber — logging
 - dotenvy — read `.env`
@@ -41,9 +44,11 @@ cargo run
 
 `cargo run` starts the API (`default-run = warehouse` in `Cargo.toml`). The event listener is a separate binary and keeps its terminal busy like the server does.
 
-The server listens on `http://localhost:3000`. Open that URL in a browser for a page where you can add, edit, and delete items. The page and API share the same origin, so you do not need a separate frontend.
+The server listens on `http://localhost:3000`. Open that URL in a browser for a page where you can add, edit, and delete items. The assistant panel has Listen / Stop next to Send: the same speech routes as the desktop window (`/voice/stream` and `/voice/tts`). The page and API share the same origin, so you do not need a separate frontend. Allow the microphone when the browser asks.
 
-`docker compose` starts Postgres 16 and Mosquitto (MQTT broker). Postgres also creates a second database `warehouse_test` once (`docker/init-test-db.sql`). Tests use it so they do not wipe data you use manually.
+`docker compose` starts Postgres 16, Mosquitto (MQTT broker), and the voice sidecar. Postgres also creates a second database `warehouse_test` once (`docker/init-test-db.sql`). Tests use it so they do not wipe data you use manually.
+
+The first start of the voice container downloads about 100 MB of models (Vosk 39 MB, Piper 60 MB, Silero 2 MB) into the `voice-models` volume and checks each file's sha256. Later starts reuse the volume. Watch it with `docker compose logs -f voice`. The sidecar needs about 1 GB of RAM; the compose file caps it at 1500 MB. Speech still needs `GROQ_API_KEY` for the assistant. Without the sidecar, item routes keep working and `/voice/tts` returns 503.
 
 To print warehouse events, open a second terminal before `cargo run`:
 
@@ -75,6 +80,8 @@ The window reads `WAREHOUSE_API_URL` (default `http://localhost:3000`) and the s
 
 The same window has an Assistant panel on the right. It works only when `GROQ_API_KEY` is set in `.env` and the API is restarted. Default model: `openai/gpt-oss-20b` (`GROQ_MODEL`). The key stays on the server: the window sends text to `POST /assistant` and never sees the key. An empty key does not break the warehouse: the server logs a warning and chat gets 503.
 
+Listen uses the microphone. On the desktop window, macOS asks for permission the first time; allow it for Terminal or the IDE that launches `cargo`. In the browser, allow the microphone for `http://localhost:3000`. Recognized text is sent through the same assistant as the Send button. The reply is spoken. Confirm delete and Add to existing stay on their buttons. Stop ends the microphone. While the reply plays, microphone audio is not sent, so the recognizer does not hear itself.
+
 ## Running tests
 
 ```bash
@@ -85,6 +92,8 @@ cargo test --workspace
 - Unit tests in `warehouse-desktop` cover MQTT parsing, expiry styling, and how the window applies events. `egui_kittest` draws the window: an empty name does not send a command; Send queues a phrase; assistant replies show in the panel; Confirm delete sends deletion.
 - Integration tests in `tests/api.rs` hit real Postgres via `TEST_DATABASE_URL`. If the variable is missing, the test is skipped with a message instead of failing.
 - `tests/assistant.rs` starts a fake Groq server on a random port. Responses are scripted, not live LLM output. Real Groq is never called. `tests/api.rs` and `tests/assistant.rs` are separate processes, so both take the same `pg_advisory_lock` before truncating the table.
+- `tests/voice.rs` starts a fake speech sidecar. No test loads Vosk or Piper.
+- `voice-sidecar`: `python3 -m pytest` from that directory. Those tests do not download models. Install `pytest` first (`pip install -r voice-sidecar/requirements-dev.txt`).
 - Tests run migrations on the test database and clear the `items` table.
 - Requests hit the router in-process without opening a port via `tower::ServiceExt::oneshot`.
 
@@ -106,6 +115,8 @@ cargo test --workspace -- --test-threads=1
 | PUT | `/items/{id}` | Replace name and quantity. `404` if missing. |
 | DELETE | `/items/{id}` | Delete. `204` with no body, or `404`. |
 | POST | `/assistant` | Chat. Body: message history. Response: reply text, `changed`, optionally `pending_delete` when the model asks to delete, and optionally `pending_add` when a create matches an existing name. |
+| GET | `/voice/stream` | Websocket. Client sends 16 kHz mono PCM16. Server sends JSON `speech_start`, `transcript`, or `error`. |
+| POST | `/voice/tts` | Body `{"text":"..."}`. Response is `audio/wav`. |
 
 `id` is a UUID. Request and response bodies are JSON.
 
@@ -193,8 +204,10 @@ src/llm.rs            Groq HTTP client
 src/routes.rs         route table
 src/mqtt.rs           publish events to the broker
 src/expiry.rs         background expiry checker
+src/voice.rs          websocket and TTS proxy to the speech sidecar
 src/bin/mqtt_listener.rs  subscriber that prints events
 static/index.html     demo page, compiled into the binary
+voice-sidecar/        Python service: Silero VAD, Vosk, Piper. Models download on first start.
 mosquitto/config.conf local broker without a password
 migrations/           SQLx SQL migrations
 tests/api.rs          REST integration tests
@@ -255,6 +268,14 @@ The server does not store chat history. The window sends the visible transcript 
 
 The key lives in `GROQ_API_KEY` on the server. The window never receives it. Tests override `GROQ_BASE_URL` with a local axum fake so they never hit the network. Default model: `openai/gpt-oss-20b`.
 
+### Why speech is a separate process
+
+Vosk, Silero, and Piper are maintained as Python libraries. The Rust API stays the only process the desktop window and the browser page talk to: it proxies the microphone websocket and the WAV download, and `POST /assistant` is unchanged. A recognized phrase becomes the same `Ask` command as a typed line. An empty `VOICE_URL` returns 503, a dead sidecar returns 502, and item routes keep working either way.
+
+VAD runs next to the recognizer. Clients only forward PCM, so phrase boundaries stay in one place. The model files are not in git. `voice-sidecar/app/bootstrap.py` downloads them into the docker volume on first start, checks sha256, and writes a `.ready` marker. A crash mid-download leaves no marker, so the next start fetches that model again.
+
+Piper (`piper-tts`, project piper1-gpl) is GPL-3.0-or-later. Vosk is Apache-2.0. Silero VAD is MIT. The downloaded models stay in the volume and are not committed.
+
 ### Why validation is shared but repeated on the server
 
 `validate_item` lives in `warehouse-core`. The window calls it before sending and shows errors immediately. The server calls it again because any client can post JSON directly, including `curl`. Shared validation does not replace checks at the API boundary.
@@ -262,7 +283,3 @@ The key lives in `GROQ_API_KEY` on the server. The window never receives it. Tes
 ### Why MQTT on the desktop is best-effort
 
 Like on the server, the broker only relays events; Postgres remains authoritative. If Mosquitto is unreachable, the window shows MQTT offline and keeps working over REST. The broker client id includes a fresh UUID so two open windows do not kick each other off the same id.
-
-## What I learned
-
-_A short note in my own words: what felt unfamiliar after TypeScript and what I want to remember. I will fill this in after finishing the project._

@@ -1,0 +1,39 @@
+{
+  "models": [
+    {
+      "name": "vosk",
+      "files": [
+        {
+          "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+          "sha256": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
+          "archive": "zip"
+        }
+      ]
+    },
+    {
+      "name": "piper",
+      "files": [
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/low/en_US-lessac-low.onnx",
+          "sha256": "f7d01dde371555732c4c314111ac79672b1a5ce2fc19266ab42178fd8df7f375",
+          "filename": "en_US-lessac-low.onnx"
+        },
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/low/en_US-lessac-low.onnx.json",
+          "sha256": "45754dfdebb3b8661c3fc564713772deec6e064feeb5b4e9594857dc7305193a",
+          "filename": "en_US-lessac-low.onnx.json"
+        }
+      ]
+    },
+    {
+      "name": "vad",
+      "files": [
+        {
+          "url": "https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.3/src/silero_vad/data/silero_vad.onnx",
+          "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+          "filename": "silero_vad.onnx"
+        }
+      ]
+    }
+  ]
+}

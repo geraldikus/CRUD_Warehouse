@@ -7,6 +7,7 @@ use warehouse::db;
 use warehouse::expiry;
 use warehouse::llm::GroqClient;
 use warehouse::mqtt::MqttPublisher;
+use warehouse::voice::VoiceClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -35,7 +36,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tracing::warn!("GROQ_API_KEY is not set, POST /assistant will return 503");
     }
 
-    let state = AppState { pool, mqtt, llm };
+    let voice = config.voice_url.as_ref().map(|url| VoiceClient::new(url));
+    match &voice {
+        Some(client) => {
+            if let Err(err) = client.probe().await {
+                tracing::warn!(
+                    error = %err,
+                    "voice sidecar unavailable, speech routes will fail until it is up"
+                );
+            } else {
+                tracing::info!("voice sidecar ready");
+            }
+        }
+        None => tracing::info!("VOICE_URL is empty, speech routes will return 503"),
+    }
+
+    let state = AppState {
+        pool,
+        mqtt,
+        llm,
+        voice,
+    };
     // Same process as the HTTP server, separate task. Ctrl+C stops both.
     tokio::spawn(expiry::run_loop(state.clone()));
     let app = warehouse::app(state);

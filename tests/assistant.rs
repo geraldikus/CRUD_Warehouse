@@ -171,6 +171,7 @@ fn assistant_app(pool: PgPool, base_url: &str) -> axum::Router {
         pool,
         mqtt: MqttPublisher::disabled(),
         llm: Some(GroqClient::new("test-key", "openai/gpt-oss-20b", base_url)),
+        voice: None,
     })
 }
 
@@ -306,6 +307,7 @@ async fn delete_tool_waits_for_confirmation() {
         pool: pool.clone(),
         mqtt: MqttPublisher::disabled(),
         llm: None,
+        voice: None,
     });
     let (status, body) = send(
         &app_for_create,
@@ -346,6 +348,7 @@ async fn create_tool_asks_when_the_name_already_exists() {
         pool: pool.clone(),
         mqtt: MqttPublisher::disabled(),
         llm: None,
+        voice: None,
     });
     let (status, body) = send(
         &app_for_create,
@@ -390,6 +393,7 @@ async fn add_fallback_when_model_only_replies() {
         pool: pool.clone(),
         mqtt: MqttPublisher::disabled(),
         llm: None,
+        voice: None,
     });
     let (status, body) = send(
         &app_for_create,
@@ -428,6 +432,7 @@ async fn assistant_without_a_key_is_unavailable() {
         pool,
         mqtt: MqttPublisher::disabled(),
         llm: None,
+        voice: None,
     });
 
     let (status, body) = send(&app, ask("hello")).await;

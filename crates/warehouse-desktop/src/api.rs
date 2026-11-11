@@ -89,6 +89,38 @@ impl ApiClient {
         read_json(response).await
     }
 
+    /// Speech synthesis. Piper runs on the sidecar, so this waits longer
+    /// than a normal item write. The client timeout stays at 10s.
+    pub(crate) async fn tts(&self, text: &str) -> Result<Vec<u8>, ApiError> {
+        let response = self
+            .http
+            .post(format!("{}/voice/tts", self.base))
+            .json(&serde_json::json!({ "text": text }))
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await
+            .map_err(transport)?;
+        if !response.status().is_success() {
+            return Err(ApiError::Message(error_message(response).await));
+        }
+        response
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(transport)
+    }
+
+    pub(crate) fn voice_stream_url(&self) -> String {
+        let ws = if let Some(rest) = self.base.strip_prefix("https://") {
+            format!("wss://{rest}")
+        } else if let Some(rest) = self.base.strip_prefix("http://") {
+            format!("ws://{rest}")
+        } else {
+            self.base.clone()
+        };
+        format!("{ws}/voice/stream")
+    }
+
     pub(crate) async fn delete(&self, id: Uuid) -> Result<(), ApiError> {
         let response = self
             .http

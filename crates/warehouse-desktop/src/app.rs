@@ -30,6 +30,8 @@ pub struct WarehouseApp {
     chat_busy: bool,
     pending_delete: Option<PendingDelete>,
     pending_add: Option<PendingAdd>,
+    listening: bool,
+    speaking: bool,
     now: DateTime<Utc>,
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -61,6 +63,8 @@ impl WarehouseApp {
             chat_busy: false,
             pending_delete: None,
             pending_add: None,
+            listening: false,
+            speaking: false,
             now: Utc::now(),
             commands,
             events,
@@ -83,6 +87,10 @@ impl WarehouseApp {
                 self.error = Some(message);
             }
             Event::AssistantReply(reply) => self.apply_reply(reply),
+            Event::VoiceListening(on) => self.listening = on,
+            Event::VoiceSpeaking(on) => self.speaking = on,
+            Event::VoiceTranscript(text) => self.accept_transcript(text),
+            Event::VoiceError(message) => self.error = Some(message),
             Event::Mqtt(online) => self.mqtt_online = online,
             Event::Remote(RemoteEvent::Changed) => {}
             Event::Remote(RemoteEvent::Expiring { name, hours_left }) => {
@@ -144,6 +152,25 @@ impl WarehouseApp {
             text,
         });
         self.chat_input.clear();
+        self.chat_busy = true;
+        self.error = None;
+        let _ = self.commands.send(Command::Ask(self.chat.clone()));
+    }
+
+    /// A phrase from the recognizer takes the same path as the Send button.
+    /// Delete and add still wait for the existing confirm buttons.
+    fn accept_transcript(&mut self, text: String) {
+        if self.chat_busy {
+            return;
+        }
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        self.chat.push(ChatMessage {
+            role: ChatRole::User,
+            text,
+        });
         self.chat_busy = true;
         self.error = None;
         let _ = self.commands.send(Command::Ask(self.chat.clone()));
@@ -324,7 +351,25 @@ impl WarehouseApp {
     }
 
     fn chat_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Assistant");
+        ui.horizontal(|ui| {
+            ui.heading("Assistant");
+            if self.speaking {
+                ui.colored_label(theme::WARN, "speaking");
+            } else if self.listening {
+                ui.colored_label(theme::OK, "listening");
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if self.listening { "Stop" } else { "Listen" };
+                if ui.add(theme::accent_button(label)).clicked() {
+                    let command = if self.listening {
+                        Command::VoiceStop
+                    } else {
+                        Command::VoiceStart
+                    };
+                    let _ = self.commands.send(command);
+                }
+            });
+        });
 
         // Clone the id out of the option so the buttons can clear it.
         // The closure would otherwise borrow `self` twice.
@@ -396,10 +441,7 @@ impl WarehouseApp {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if self.chat.is_empty() && !self.chat_busy {
-                    ui.colored_label(
-                        theme::MUTED,
-                        "Ask about stock, or tell me to add an item.",
-                    );
+                    ui.colored_label(theme::MUTED, "Ask about stock, or tell me to add an item.");
                 }
                 for message in &self.chat {
                     chat_bubble(ui, message.role, &message.text);
@@ -818,6 +860,45 @@ mod tests {
             other => panic!("expected ask, got {other:?}"),
         }
         assert!(harness.state().chat_busy);
+    }
+
+    #[test]
+    fn listen_button_sends_voice_start() {
+        let (app, mut commands) = disconnected();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 720.0))
+            .build_eframe(|_cc| app);
+
+        harness.get_by_label("Listen").click();
+        harness.run();
+
+        match commands.try_recv().unwrap() {
+            Command::VoiceStart => {}
+            other => panic!("expected voice start, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transcript_event_asks_and_shows_the_phrase() {
+        let (mut app, mut commands) = disconnected();
+        app.apply_event(Event::VoiceTranscript("add 3 bolts".to_string()));
+
+        match commands.try_recv().unwrap() {
+            Command::Ask(messages) => {
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].role, ChatRole::User);
+                assert_eq!(messages[0].text, "add 3 bolts");
+            }
+            other => panic!("expected ask, got {other:?}"),
+        }
+        assert!(app.chat_busy);
+
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 720.0))
+            .build_eframe(|_cc| app);
+        // The thinking animation requests a repaint every frame, so run() never settles.
+        harness.run_steps(2);
+        harness.get_by_label("add 3 bolts");
     }
 
     #[test]
