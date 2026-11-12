@@ -1,3 +1,5 @@
+![Warehouse egui desktop window](Warehouse.gif)
+
 # Warehouse Item Manager API
 
 A small REST API for warehouse inventory: create items, list them, change quantities, and delete them. A desktop egui window talks to the same REST API and listens to the same MQTT events. The window can also listen to the microphone: a local Python service turns speech into text, the existing assistant handles it, and Piper speaks the reply. The project covers a typical stack: HTTP, PostgreSQL, input validation, UI, errors, and tests.
