@@ -830,14 +830,12 @@
     async function addToExisting(match) {
       if (!pendingAdd) return;
       showError("");
-      const response = await fetch("/items/" + match.id, {
-        method: "PUT",
+      // The server adds to the current row. Sending match.quantity + N
+      // through PUT would undo any change made since the assistant replied.
+      const response = await fetch("/items/" + match.id + "/add", {
+        method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: match.name,
-          quantity: Number(match.quantity) + Number(pendingAdd.quantity),
-          expires_at: match.expires_at || null,
-        }),
+        body: JSON.stringify({ amount: Number(pendingAdd.quantity) }),
       });
       if (!response.ok) {
         showError(await errorMessage(response));

@@ -9,6 +9,7 @@ use std::time::Duration;
 use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -106,12 +107,40 @@ pub(crate) struct TtsRequest {
 /// Websocket upgrade. The sidecar URL is resolved before the upgrade so a
 /// missing `VOICE_URL` is a normal 503 instead of a socket that opens and
 /// immediately dies.
+///
+/// Browsers do not apply CORS to websockets: any site the user has open
+/// could connect to `localhost:3000/voice/stream`. A browser always sends
+/// `Origin`, so a foreign one is refused. The desktop client sends none.
 pub(crate) async fn stream(
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
+    if !same_origin(&headers) {
+        return Ok((StatusCode::FORBIDDEN, "cross-origin websocket refused").into_response());
+    }
     let voice = state.voice.clone().ok_or(AppError::VoiceUnavailable)?;
-    Ok(ws.on_upgrade(move |socket| proxy(socket, voice)))
+    Ok(ws
+        .on_upgrade(move |socket| proxy(socket, voice))
+        .into_response())
+}
+
+/// No `Origin` (not a browser) passes. Otherwise its host must equal `Host`.
+fn same_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let (Ok(origin), Some(Ok(host))) = (
+        origin.to_str(),
+        headers.get(header::HOST).map(|value| value.to_str()),
+    ) else {
+        return false;
+    };
+    let origin_host = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+        .unwrap_or("");
+    origin_host.eq_ignore_ascii_case(host)
 }
 
 async fn proxy(mut socket: WebSocket, voice: VoiceClient) {
@@ -205,4 +234,38 @@ pub(crate) async fn tts(
     let voice = state.voice.as_ref().ok_or(AppError::VoiceUnavailable)?;
     let wav = voice.synthesize(text).await.map_err(AppError::Voice)?;
     Ok(([(axum::http::header::CONTENT_TYPE, "audio/wav")], wav).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(pairs: &[(header::HeaderName, &str)]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(name.clone(), value.parse().unwrap());
+        }
+        map
+    }
+
+    #[test]
+    fn origin_check_allows_same_site_and_non_browsers() {
+        assert!(same_origin(&headers(&[(header::HOST, "localhost:3000")])));
+        assert!(same_origin(&headers(&[
+            (header::HOST, "localhost:3000"),
+            (header::ORIGIN, "http://localhost:3000"),
+        ])));
+    }
+
+    #[test]
+    fn origin_check_refuses_another_site() {
+        assert!(!same_origin(&headers(&[
+            (header::HOST, "localhost:3000"),
+            (header::ORIGIN, "https://evil.example"),
+        ])));
+        assert!(!same_origin(&headers(&[
+            (header::HOST, "localhost:3000"),
+            (header::ORIGIN, "null"),
+        ])));
+    }
 }

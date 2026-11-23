@@ -20,6 +20,7 @@ pub fn router(state: AppState) -> Router {
                 .put(handlers::update)
                 .delete(handlers::delete),
         )
+        .route("/items/{id}/add", post(handlers::add_stock))
         .route("/assistant", post(assistant::handle))
         .route("/voice/stream", get(voice::stream))
         .route("/voice/tts", post(voice::tts))

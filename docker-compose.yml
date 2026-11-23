@@ -2,7 +2,7 @@ services:
   postgres:
     image: postgres:16
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     env_file:
       - .env
     volumes:
@@ -17,7 +17,7 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     ports:
-      - "1883:1883"
+      - "127.0.0.1:1883:1883"
     volumes:
       - ./mosquitto/config.conf:/mosquitto/config/mosquitto.conf
     healthcheck:

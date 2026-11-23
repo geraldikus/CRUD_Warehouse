@@ -283,3 +283,95 @@ async fn optional_expiry_date() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.expect("update body")["expires_at"].is_null());
 }
+
+#[tokio::test]
+async fn add_stock_adds_to_the_current_row() {
+    let _guard = DB_LOCK.lock().await;
+    let Some((pool, _lock)) = setup().await else {
+        return;
+    };
+    let app = test_app(pool);
+
+    let (_, body) = send(
+        &app,
+        json_request("POST", "/items", json!({"name": "dish", "quantity": 10})),
+    )
+    .await;
+    let id = body.unwrap()["id"].as_str().unwrap().to_string();
+
+    // Someone else changes the row after the client saw quantity 10.
+    let (status, _) = send(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/items/{id}"),
+            json!({"name": "dish", "quantity": 15}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Adding 2 keeps their change: 15 + 2, not 10 + 2.
+    let (status, body) = send(
+        &app,
+        json_request("POST", &format!("/items/{id}/add"), json!({"amount": 2})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.unwrap()["quantity"], 17);
+
+    let (status, _) = send(
+        &app,
+        json_request("POST", &format!("/items/{id}/add"), json!({"amount": -1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, body) = send(
+        &app,
+        json_request(
+            "POST",
+            &format!("/items/{id}/add"),
+            json!({"amount": i32::MAX}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("too large")
+    );
+
+    let (status, _) = send(
+        &app,
+        json_request(
+            "POST",
+            "/items/550e8400-e29b-41d4-a716-446655440000/add",
+            json!({"amount": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn too_long_name_is_rejected() {
+    let _guard = DB_LOCK.lock().await;
+    let Some((pool, _lock)) = setup().await else {
+        return;
+    };
+    let app = test_app(pool);
+
+    let (status, _) = send(
+        &app,
+        json_request(
+            "POST",
+            "/items",
+            json!({"name": "x".repeat(201), "quantity": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

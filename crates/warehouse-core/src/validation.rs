@@ -29,6 +29,12 @@ pub fn validate_item(name: &str, quantity: i32) -> Result<(), ValidationError> {
         return Err(ValidationError("name must not be empty".to_string()));
     }
 
+    if name.trim().chars().count() > MAX_NAME_CHARS {
+        return Err(ValidationError(format!(
+            "name must be at most {MAX_NAME_CHARS} characters"
+        )));
+    }
+
     if quantity < 0 {
         return Err(ValidationError(
             "quantity must be greater than or equal to 0".to_string(),
@@ -37,6 +43,20 @@ pub fn validate_item(name: &str, quantity: i32) -> Result<(), ValidationError> {
 
     Ok(())
 }
+
+/// Check an amount for `POST /items/{id}/add`.
+pub fn validate_amount(amount: i32) -> Result<(), ValidationError> {
+    if amount < 0 {
+        return Err(ValidationError(
+            "amount must be greater than or equal to 0".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Longest item name the API accepts, in characters. The database has the
+/// same limit as a CHECK constraint.
+pub const MAX_NAME_CHARS: usize = 200;
 
 #[cfg(test)]
 mod tests {
@@ -68,6 +88,21 @@ mod tests {
     #[test]
     fn accepts_normal_item() {
         assert!(validate_item(" bolts ", 3).is_ok());
+    }
+
+    #[test]
+    fn rejects_too_long_name() {
+        let name = "x".repeat(MAX_NAME_CHARS + 1);
+        let message = validation_message(validate_item(&name, 1));
+        assert!(message.contains("name"));
+        assert!(validate_item(&"x".repeat(MAX_NAME_CHARS), 1).is_ok());
+    }
+
+    #[test]
+    fn rejects_negative_amount() {
+        let message = validation_message(validate_amount(-1));
+        assert!(message.contains("amount"));
+        assert!(validate_amount(0).is_ok());
     }
 
     fn validation_message(result: Result<(), ValidationError>) -> String {

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::AppError;
-use crate::models::{CreateItem, Item, UpdateItem};
+use crate::models::{AddStock, CreateItem, Item, UpdateItem};
 use crate::repo;
 
 /// `GET /`. The demo page is compiled into the binary.
@@ -68,6 +68,16 @@ pub async fn update(
     Json(input): Json<UpdateItem>,
 ) -> Result<Json<Item>, AppError> {
     let item = repo::update_item(&state.pool, &state.mqtt, id, input).await?;
+    Ok(Json(item))
+}
+
+/// `POST /items/{id}/add`. Adds to the stored quantity atomically.
+pub async fn add_stock(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<AddStock>,
+) -> Result<Json<Item>, AppError> {
+    let item = repo::add_stock(&state.pool, &state.mqtt, id, input.amount).await?;
     Ok(Json(item))
 }
 

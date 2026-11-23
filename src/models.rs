@@ -5,6 +5,6 @@
 //! sqlx to be a dependency of the core crate.
 
 pub use warehouse_core::models::{
-    AssistantReply, AssistantRequest, ChatMessage, ChatRole, CreateItem, Item, PendingAdd,
-    PendingAddMatch, PendingDelete, UpdateItem,
+    AddStock, AssistantReply, AssistantRequest, ChatMessage, ChatRole, CreateItem, Item,
+    PendingAdd, PendingAddMatch, PendingDelete, UpdateItem,
 };

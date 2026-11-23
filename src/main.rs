@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::net::SocketAddr;
 
 use warehouse::AppState;
 use warehouse::config::Config;
@@ -60,7 +59,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Same process as the HTTP server, separate task. Ctrl+C stops both.
     tokio::spawn(expiry::run_loop(state.clone()));
     let app = warehouse::app(state);
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let addr = config.bind_addr;
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     tracing::info!("listening on {addr}");

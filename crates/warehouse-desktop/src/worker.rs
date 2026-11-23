@@ -16,6 +16,8 @@ pub(crate) enum Command {
     Refresh,
     Create(CreateItem),
     Update(Uuid, UpdateItem),
+    /// Add to the stored quantity on the server (`POST /items/{id}/add`).
+    AddStock(Uuid, i32),
     Delete(Uuid),
     /// The visible transcript, including the line the user just sent.
     Ask(Vec<ChatMessage>),
@@ -345,6 +347,10 @@ async fn perform(api: &ApiClient, command: Command) -> Result<Event, crate::api:
         }
         Command::Update(id, input) => {
             api.update(id, &input).await?;
+            Ok(Event::Items(api.list().await?))
+        }
+        Command::AddStock(id, amount) => {
+            api.add_stock(id, amount).await?;
             Ok(Event::Items(api.list().await?))
         }
         Command::Delete(id) => {

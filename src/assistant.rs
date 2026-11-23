@@ -21,6 +21,13 @@ use crate::repo;
 /// paid HTTP call. The cap also stops a model that keeps calling tools.
 const MAX_STEPS: usize = 5;
 
+/// Only the newest lines of the transcript go to Groq. Every line is paid
+/// input on every step, and the client may send a chat of any length.
+const MAX_HISTORY: usize = 20;
+
+/// One chat line longer than this is refused before any paid call.
+const MAX_MESSAGE_CHARS: usize = 4000;
+
 pub async fn handle(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::Json(request): axum::Json<AssistantRequest>,
@@ -413,13 +420,31 @@ fn chat_to_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, AppError> {
         ));
     }
 
+    // The first line must still come from the user, so it is checked on the
+    // full transcript. Older lines are dropped afterwards.
+    if messages[0].role != ChatRole::User {
+        return Err(AppError::Validation(
+            "the conversation must start with a user message".to_string(),
+        ));
+    }
+    let mut recent = &messages[messages.len().saturating_sub(MAX_HISTORY)..];
+    while recent
+        .first()
+        .is_some_and(|message| message.role != ChatRole::User)
+    {
+        recent = &recent[1..];
+    }
+
     let mut history = Vec::new();
-    for message in messages {
+    for message in recent {
         let text = message.text.trim();
         if text.is_empty() {
             return Err(AppError::Validation(
                 "message text must not be empty".to_string(),
             ));
+        }
+        if text.chars().count() > MAX_MESSAGE_CHARS {
+            return Err(AppError::Validation("message text is too long".to_string()));
         }
         let role = match message.role {
             ChatRole::User => "user",
@@ -634,6 +659,39 @@ mod tests {
         .unwrap_err();
         match opening {
             AppError::Validation(message) => assert!(message.contains("user message")),
+            other => panic!("expected validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn messages_keep_only_the_newest_lines_and_start_with_the_user() {
+        let messages: Vec<ChatMessage> = (0..MAX_HISTORY + 5)
+            .map(|index| ChatMessage {
+                role: if index % 2 == 0 {
+                    ChatRole::User
+                } else {
+                    ChatRole::Assistant
+                },
+                text: format!("line {index}"),
+            })
+            .collect();
+        let history = chat_to_messages(&messages).unwrap();
+        assert!(history.len() <= MAX_HISTORY);
+        assert_eq!(history[0]["role"], "user");
+        assert_eq!(
+            history.last().unwrap()["content"],
+            format!("line {}", MAX_HISTORY + 4)
+        );
+    }
+
+    #[test]
+    fn messages_reject_a_huge_line() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::User,
+            text: "x".repeat(MAX_MESSAGE_CHARS + 1),
+        }];
+        match chat_to_messages(&messages).unwrap_err() {
+            AppError::Validation(message) => assert!(message.contains("too long"), "{message}"),
             other => panic!("expected validation, got {other:?}"),
         }
     }

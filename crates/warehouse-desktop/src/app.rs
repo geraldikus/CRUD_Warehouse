@@ -116,14 +116,11 @@ impl WarehouseApp {
         let Some(pending) = &self.pending_add else {
             return;
         };
-        let _ = self.commands.send(Command::Update(
-            existing.id,
-            UpdateItem {
-                name: existing.name.clone(),
-                quantity: existing.quantity + pending.quantity,
-                expires_at: existing.expires_at,
-            },
-        ));
+        // The server does the addition. `existing.quantity` is a snapshot
+        // from the assistant reply and may already be out of date.
+        let _ = self
+            .commands
+            .send(Command::AddStock(existing.id, pending.quantity));
         self.pending_add = None;
     }
 
@@ -992,13 +989,11 @@ mod tests {
         harness.run();
 
         match commands.try_recv().unwrap() {
-            Command::Update(got, item) => {
+            Command::AddStock(got, amount) => {
                 assert_eq!(got, id);
-                assert_eq!(item.name, "Dish");
-                assert_eq!(item.quantity, 12);
-                assert_eq!(item.expires_at, None);
+                assert_eq!(amount, 2);
             }
-            other => panic!("expected update, got {other:?}"),
+            other => panic!("expected add stock, got {other:?}"),
         }
         assert!(harness.state().pending_add.is_none());
 

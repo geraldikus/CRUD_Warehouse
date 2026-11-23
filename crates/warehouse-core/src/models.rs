@@ -41,6 +41,15 @@ pub struct UpdateItem {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// JSON body for `POST /items/{id}/add`.
+///
+/// The server adds `amount` inside one SQL statement. A client that sent
+/// `old + amount` through `PUT` would overwrite a change made in between.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddStock {
+    pub amount: i32,
+}
+
 /// Who wrote one line of the assistant transcript.
 ///
 /// Serde stores this as `"user"` or `"assistant"`. The server maps these

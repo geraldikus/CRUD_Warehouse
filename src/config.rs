@@ -1,9 +1,13 @@
 use std::env;
+use std::net::SocketAddr;
 
 /// Settings the process needs before it can serve requests.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
+    /// Where the HTTP server listens. The API has no login, so the default
+    /// is this machine only. `BIND_ADDR=0.0.0.0:3000` opens it to the network.
+    pub bind_addr: SocketAddr,
     pub mqtt_host: String,
     pub mqtt_port: u16,
     /// `None` when the variable is missing or blank. The HTTP server still
@@ -30,6 +34,13 @@ impl Config {
         let database_url = env::var("DATABASE_URL")
             .expect("DATABASE_URL is not set. Copy .env.example to .env or export the variable.");
 
+        let bind_addr = match non_empty("BIND_ADDR") {
+            Some(value) => value
+                .parse()
+                .unwrap_or_else(|_| panic!("BIND_ADDR is not a socket address: {value}")),
+            None => SocketAddr::from(([127, 0, 0, 1], 3000)),
+        };
+
         // MQTT is optional. Missing values mean the local Mosquitto from docker compose.
         let mqtt_host = env::var("MQTT_HOST").unwrap_or_else(|_| "localhost".to_string());
         let mqtt_port = env::var("MQTT_PORT")
@@ -55,6 +66,7 @@ impl Config {
 
         Self {
             database_url,
+            bind_addr,
             mqtt_host,
             mqtt_port,
             groq_api_key,

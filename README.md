@@ -46,7 +46,7 @@ cargo run
 
 `cargo run` starts the API (`default-run = warehouse` in `Cargo.toml`). The event listener is a separate binary and keeps its terminal busy like the server does.
 
-The server listens on `http://localhost:3000`. Open that URL in a browser for a page where you can add, edit, and delete items. The assistant panel has Listen / Stop next to Send: the same speech routes as the desktop window (`/voice/stream` and `/voice/tts`). The page and API share the same origin, so you do not need a separate frontend. Allow the microphone when the browser asks.
+The server listens on `http://localhost:3000` (only this machine: the API has no login). Set `BIND_ADDR=0.0.0.0:3000` to open it to the network on purpose. Open that URL in a browser for a page where you can add, edit, and delete items. The assistant panel has Listen / Stop next to Send: the same speech routes as the desktop window (`/voice/stream` and `/voice/tts`). The page and API share the same origin, so you do not need a separate frontend. Allow the microphone when the browser asks.
 
 `docker compose` starts Postgres 16, Mosquitto (MQTT broker), and the voice sidecar. Postgres also creates a second database `warehouse_test` once (`docker/init-test-db.sql`). Tests use it so they do not wipe data you use manually.
 
@@ -115,6 +115,7 @@ cargo test --workspace -- --test-threads=1
 | GET | `/items/{id}` | One item. `404` if missing. |
 | POST | `/items` | Create. `201` and the created row. |
 | PUT | `/items/{id}` | Replace name and quantity. `404` if missing. |
+| POST | `/items/{id}/add` | Body `{"amount":N}`. Adds `N` to the stored quantity in one SQL statement, so a concurrent change is not lost. `404` if missing, `400` if the sum would not fit. |
 | DELETE | `/items/{id}` | Delete. `204` with no body, or `404`. |
 | POST | `/assistant` | Chat. Body: message history. Response: reply text, `changed`, optionally `pending_delete` when the model asks to delete, and optionally `pending_add` when a create matches an existing name. |
 | GET | `/voice/stream` | Websocket. Client sends 16 kHz mono PCM16. Server sends JSON `speech_start`, `transcript`, or `error`. |

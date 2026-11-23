@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use uuid::Uuid;
-use warehouse_core::models::{AssistantReply, AssistantRequest, CreateItem, Item, UpdateItem};
+use warehouse_core::models::{
+    AddStock, AssistantReply, AssistantRequest, CreateItem, Item, UpdateItem,
+};
 
 #[derive(Debug)]
 pub(crate) enum ApiError {
@@ -69,6 +71,19 @@ impl ApiClient {
             .http
             .put(format!("{}/items/{id}", self.base))
             .json(input)
+            .send()
+            .await
+            .map_err(transport)?;
+        read_json(response).await
+    }
+
+    /// The server adds `amount` to the current row, so a change made since
+    /// the window last loaded the list is kept.
+    pub(crate) async fn add_stock(&self, id: Uuid, amount: i32) -> Result<Item, ApiError> {
+        let response = self
+            .http
+            .post(format!("{}/items/{id}/add", self.base))
+            .json(&AddStock { amount })
             .send()
             .await
             .map_err(transport)?;

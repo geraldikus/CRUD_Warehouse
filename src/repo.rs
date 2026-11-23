@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::models::{CreateItem, Item, UpdateItem};
 use crate::mqtt::MqttPublisher;
-use crate::validation::validate_item;
+use crate::validation::{validate_amount, validate_item};
 
 pub async fn list_items(pool: &PgPool) -> Result<Vec<Item>, AppError> {
     let items = sqlx::query_as!(
@@ -127,6 +127,50 @@ pub async fn update_item(
     .fetch_optional(pool)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    mqtt.publish_updated(&item).await;
+
+    Ok(item)
+}
+
+/// Add `amount` to the stored quantity in one statement.
+///
+/// `quantity + $1` is computed by Postgres on the current row, so two
+/// clients adding at the same time both count. The second WHERE clause
+/// refuses a sum that would not fit in INTEGER instead of a 500.
+pub async fn add_stock(
+    pool: &PgPool,
+    mqtt: &MqttPublisher,
+    id: Uuid,
+    amount: i32,
+) -> Result<Item, AppError> {
+    validate_amount(amount)?;
+
+    let item = sqlx::query_as!(
+        Item,
+        r#"
+        UPDATE items
+        SET quantity = quantity + $1,
+            updated_at = now()
+        WHERE id = $2
+          AND quantity <= 2147483647 - $1
+        RETURNING id, name, quantity, created_at, updated_at, expires_at
+        "#,
+        amount,
+        id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(item) = item else {
+        // Tell "no such row" apart from "the sum is too large".
+        return match get_item(pool, id).await? {
+            Some(_) => Err(AppError::Validation(
+                "quantity would be too large".to_string(),
+            )),
+            None => Err(AppError::NotFound),
+        };
+    };
 
     mqtt.publish_updated(&item).await;
 

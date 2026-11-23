@@ -197,15 +197,19 @@ async fn check_once(
 
         // Only the task that flips the stored stage publishes.
         // A second checker would see the new value and stay quiet.
+        // `updated_at` must match too: if someone edited the row after our
+        // SELECT (a new date, a new name), this stage was computed from stale
+        // data. We skip it and the next tick looks at the fresh row.
         let updated = sqlx::query!(
             r#"
             UPDATE items
             SET expiry_notice = $1
-            WHERE id = $2 AND expiry_notice = $3
+            WHERE id = $2 AND expiry_notice = $3 AND updated_at = $4
             "#,
             stage.as_str(),
             row.id,
-            row.expiry_notice
+            row.expiry_notice,
+            row.updated_at
         )
         .execute(&state.pool)
         .await?;
